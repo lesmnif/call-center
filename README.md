@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Kolas Call Intelligence Dashboard
 
-## Getting Started
+Next.js dashboard for viewing, filtering, and syncing transcribed 3CX call recordings.
 
-First, run the development server:
+## Setup (one-time)
+
+### 1. Supabase
+
+1. Go to [supabase.com](https://supabase.com) and create a new project
+2. Open the **SQL Editor** and run the contents of `supabase-schema.sql`
+3. Copy your project URL and keys from **Settings → API**
+
+### 2. Environment variables
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.local.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Fill in `.env.local`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
 
-## Learn More
+### 3. Import existing processed calls
 
-To learn more about Next.js, take a look at the following resources:
+If you already have calls processed in `../results.json`, import them:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npx tsx scripts/seed.ts
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 4. Run the dev server
 
-## Deploy on Vercel
+```bash
+pnpm dev
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Open [http://localhost:3000](http://localhost:3000)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Usage
+
+- The dashboard **auto-syncs on load** — it logs into 3CX, fetches the recordings list, and processes any new ones
+- Use the **Sync Now** button to trigger an on-demand refresh
+- A live progress bar shows download → transcribe → analyze steps per call
+- Filter by store, agent, category, or sentiment
+- Click any row to open the full detail panel with transcript, key points, action items
+
+## File structure
+
+```
+src/
+  app/
+    page.tsx              — Main dashboard
+    api/sync/route.ts     — Streaming SSE sync endpoint
+  lib/
+    three-cx-client.ts    — 3CX auth + protobuf + download
+    protobuf.ts           — Binary protobuf decoder
+    ai.ts                 — Whisper + GPT-5 mini
+    supabase.ts           — DB client + types
+    prompts.ts            — Whisper hint + system prompt
+    hooks.ts              — useSync, useCalls hooks
+  components/
+    sync-bar.tsx          — Sync status + progress bar
+    stats-row.tsx         — Summary stats cards
+    filters.tsx           — Search + dropdown filters
+    calls-table.tsx       — Sortable call list
+    call-detail.tsx       — Slide-over detail panel
+scripts/
+  seed.ts                 — One-time import of results.json
+supabase-schema.sql       — Run this in Supabase SQL Editor
+```
