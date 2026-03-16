@@ -8,6 +8,14 @@ export async function POST(_req: NextRequest) {
   try {
     const supabase = getSupabaseServer();
 
+    // Recover zombie "processing" calls: anything stuck in processing for
+    // longer than 15 minutes is definitely abandoned — reset to failed.
+    await supabase
+      .from("calls")
+      .update({ status: "failed" })
+      .eq("status", "processing")
+      .lt("processing_started_at", new Date(Date.now() - 15 * 60 * 1000).toISOString());
+
     const cx = new ThreeCXClient();
     await cx.login();
     const allRecordings = await cx.getRecordingsList();

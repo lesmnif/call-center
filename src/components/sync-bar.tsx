@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { type ProcessEvent } from "@/lib/hooks";
 
 type Props = {
@@ -45,100 +44,117 @@ export function SyncBar({
   }, [processing]);
 
   const errorCount = events.filter((e) => e.type === "error").length;
-
   const lastDone = [...events]
     .reverse()
-    .find((e) => e.type === "done") as Extract<
-    ProcessEvent,
-    { type: "done" }
-  > | null;
+    .find((e) => e.type === "done") as Extract<ProcessEvent, { type: "done" }> | null;
 
   const stepLabel = progress?.step ?? "processing";
-
-  const statusText = processing
-    ? progress
-      ? `Processing ${progress.current}/${progress.total} — ${stepLabel}...${
-          errorCount > 0 ? ` (${errorCount} failed)` : ""
-        }`
-      : "Starting..."
-    : syncing
-    ? "Syncing recordings..."
-    : lastDone
-    ? `Last run: ${lastDone.processed} processed, ${lastDone.failed} failed${
-        lastDone.totalCost ? ` ($${lastDone.totalCost})` : ""
-      }`
-    : pendingCount > 0
-    ? `${pendingCount} recording${pendingCount === 1 ? "" : "s"} pending`
-    : "Ready";
+  const busy = syncing || processing;
+  const doneWithFailures = !processing && lastDone && lastDone.failed > 0;
+  const isHealthy = !busy && !doneWithFailures && pendingCount === 0;
 
   const pct =
     processing && progress && progress.total > 0
-      ? (progress.current / progress.total) * 100
+      ? Math.round((progress.current / progress.total) * 100)
       : 0;
 
-  const doneWithFailures = !processing && lastDone && lastDone.failed > 0;
+  // Dot color
+  const dotColor = processing
+    ? "oklch(0.56 0.23 275)"       // indigo
+    : syncing
+    ? "oklch(0.72 0.15 60)"        // amber
+    : doneWithFailures
+    ? "oklch(0.65 0.17 50)"        // orange
+    : isHealthy || (lastDone && lastDone.failed === 0)
+    ? "oklch(0.59 0.17 148)"       // green
+    : "oklch(0.59 0.17 148)";      // green
 
-  const dotColor = doneWithFailures ? "bg-amber-500" : "bg-emerald-500";
-  const dotPing = doneWithFailures ? "bg-amber-400" : "bg-emerald-400";
-  const barColor =
-    doneWithFailures || errorCount > 0 ? "bg-amber-500" : "bg-emerald-500";
-
-  const busy = syncing || processing;
+  const statusText = processing
+    ? progress
+      ? `${progress.current} of ${progress.total} · ${stepLabel}${errorCount > 0 ? ` · ${errorCount} errors` : ""}`
+      : "Starting..."
+    : syncing
+    ? "Syncing from 3CX..."
+    : lastDone
+    ? `Done — ${lastDone.processed} processed${lastDone.failed > 0 ? `, ${lastDone.failed} failed` : ""}`
+    : pendingCount > 0
+    ? `${pendingCount} recording${pendingCount === 1 ? "" : "s"} pending analysis`
+    : "Up to date";
 
   return (
-    <div className="flex items-center gap-4 rounded-lg border border-border bg-card p-3">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          {(busy || doneWithFailures) && (
-            <span className="relative flex h-2.5 w-2.5 shrink-0">
-              {busy && (
-                <span
-                  className={`absolute inline-flex h-full w-full animate-ping rounded-full ${dotPing} opacity-75`}
-                />
-              )}
-              <span
-                className={`relative inline-flex h-2.5 w-2.5 rounded-full ${dotColor}`}
-              />
+    <div className="flex items-center gap-3 bg-card rounded-xl card-elevated px-4 py-2.5">
+
+      {/* Status dot */}
+      <span className="relative flex h-2 w-2 shrink-0">
+        {busy && (
+          <span
+            className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-40"
+            style={{ background: dotColor }}
+          />
+        )}
+        <span
+          className="relative inline-flex h-2 w-2 rounded-full"
+          style={{ background: dotColor }}
+        />
+      </span>
+
+      {/* Text */}
+      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+        {processing && progress ? (
+          <>
+            <span className="text-[11px] font-semibold" style={{ color: "oklch(0.56 0.23 275)" }}>
+              Analyzing
             </span>
-          )}
-          <span className="text-sm text-muted-foreground truncate">
-            {statusText}
-          </span>
-          {processing && (
-            <span className="text-xs text-muted-foreground/60 tabular-nums shrink-0">
+            <span className="text-[11px] text-muted-foreground/60 font-mono truncate">{statusText}</span>
+            <span className="text-[11px] font-mono text-muted-foreground/40 ml-auto shrink-0">
               {formatElapsed(elapsed)}
             </span>
-          )}
-        </div>
-        {processing && progress && progress.total > 0 && (
-          <div className="mt-2 h-1 w-full rounded-full bg-muted overflow-hidden">
-            <div
-              className={`h-full rounded-full ${barColor} transition-all duration-300`}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
+          </>
+        ) : (
+          <span className="text-[12px] text-muted-foreground/70 font-mono">{statusText}</span>
         )}
       </div>
 
-      <div className="flex items-center gap-2 shrink-0">
-        <Button
-          size="sm"
+      {/* Progress bar */}
+      {processing && progress && progress.total > 0 && (
+        <div className="shrink-0 flex items-center gap-2">
+          <div className="w-20 h-1 rounded-full bg-border overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{ width: `${pct}%`, background: "oklch(0.56 0.23 275)" }}
+            />
+          </div>
+          <span className="text-[10px] font-mono text-muted-foreground/50 tabular-nums w-7 text-right">
+            {pct}%
+          </span>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button
           onClick={onSync}
           disabled={busy}
-          variant="outline"
+          className="h-7 px-3 text-[11px] font-mono font-medium rounded-lg border border-border text-muted-foreground/60 hover:text-foreground/80 hover:border-border/80 hover:bg-muted/50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
         >
-          {syncing ? "Syncing..." : "Sync Recordings"}
-        </Button>
-        <Button
-          size="sm"
+          {syncing ? "Syncing..." : "Sync"}
+        </button>
+
+        <button
           onClick={onProcess}
           disabled={busy || pendingCount === 0}
-          variant={pendingCount > 0 ? "default" : "outline"}
+          className={`h-7 px-3.5 text-[11px] font-semibold rounded-lg transition-all ${
+            pendingCount > 0 && !busy
+              ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+              : "bg-muted text-muted-foreground/40 cursor-not-allowed"
+          }`}
         >
           {processing
-            ? "Processing..."
-            : `Process Pending${pendingCount > 0 ? ` (${pendingCount})` : ""}`}
-        </Button>
+            ? "Analyzing..."
+            : pendingCount > 0
+            ? `Analyze (${pendingCount})`
+            : "Analyze"}
+        </button>
       </div>
     </div>
   );

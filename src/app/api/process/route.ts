@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
         // Atomically claim this recording — only if still pending/failed
         const { data: claimed, error: claimError } = await supabase
           .from("calls")
-          .update({ status: "processing" })
+          .update({ status: "processing", processing_started_at: new Date().toISOString() })
           .eq("recording_id", recordingId)
           .in("status", ["pending", "failed"])
           .select("recording_id");
