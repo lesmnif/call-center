@@ -86,7 +86,9 @@ export function useProcess() {
     };
   }, []);
 
-  const startProcess = useCallback(async (recordingIds?: number[]) => {
+  const startProcess = useCallback(async (recordingIds: number[]) => {
+    if (recordingIds.length === 0) return;
+
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -96,52 +98,58 @@ export function useProcess() {
     setProgress(null);
 
     try {
-      const res = await fetch("/api/process", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(recordingIds ? { recordingIds } : {}),
-        signal: controller.signal,
-      });
+      // Process recordings one at a time — each request is bounded and won't timeout
+      for (let i = 0; i < recordingIds.length; i++) {
+        if (controller.signal.aborted) break;
 
-      if (!res.body) throw new Error("No response stream");
+        const recId = recordingIds[i];
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+        setProgress({ current: i + 1, total: recordingIds.length, step: "starting" });
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const res = await fetch("/api/process", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ recordingId: recId }),
+          signal: controller.signal,
+        });
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() ?? "";
+        if (!res.body) continue;
 
-        for (const line of lines) {
-          const cleaned = line.replace(/^data: /, "").trim();
-          if (!cleaned) continue;
-          try {
-            const event: ProcessEvent = JSON.parse(cleaned);
-            setEvents((prev) => [...prev, event]);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
 
-            if (
-              event.type === "processing" ||
-              event.type === "processed" ||
-              event.type === "error"
-            ) {
-              setProgress({
-                current: event.current,
-                total: event.total,
-                step:
-                  event.type === "processing"
-                    ? event.step
-                    : event.type === "processed"
-                    ? "done"
-                    : "error",
-              });
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const cleaned = line.replace(/^data: /, "").trim();
+            if (!cleaned) continue;
+            try {
+              const event: ProcessEvent = JSON.parse(cleaned);
+              setEvents((prev) => [...prev, event]);
+
+              if (event.type === "processing") {
+                setProgress({
+                  current: i + 1,
+                  total: recordingIds.length,
+                  step: event.step,
+                });
+              } else if (event.type === "done" || event.type === "fatal") {
+                setProgress({
+                  current: i + 1,
+                  total: recordingIds.length,
+                  step: event.type === "done" ? "done" : "failed",
+                });
+              }
+            } catch {
+              // skip malformed lines
             }
-          } catch {
-            // skip malformed lines
           }
         }
       }

@@ -131,10 +131,24 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
                       <span className="font-medium">{call.agent_name}</span>
                     </>
                   )}
-                  {call.customer_name && (
+                  {(call.customer_name || call.caller_phone) && (
                     <>
                       <span className="text-muted-foreground">Customer</span>
-                      <span className="font-medium">{call.customer_name}</span>
+                      <span className="font-medium">
+                        {call.customer_name ?? (
+                          <span className="font-mono font-normal text-muted-foreground">
+                            {call.caller_phone}
+                          </span>
+                        )}
+                      </span>
+                    </>
+                  )}
+                  {call.customer_name && call.caller_phone && (
+                    <>
+                      <span className="text-muted-foreground">Caller #</span>
+                      <span className="font-mono text-sm text-muted-foreground">
+                        {call.caller_phone}
+                      </span>
                     </>
                   )}
                   {call.store && (

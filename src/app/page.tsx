@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSync, useProcess, useCalls } from "@/lib/hooks";
 import { SyncBar } from "@/components/sync-bar";
 import { StatsRow } from "@/components/stats-row";
@@ -20,6 +20,24 @@ export default function Dashboard() {
   const { processing, events: processEvents, progress, startProcess } = useProcess();
   const { calls, loading, refetch } = useCalls();
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  const hasAutoSynced = useRef(false);
+  const hasAutoProcessed = useRef(false);
+
+  const pendingIds = useMemo(
+    () =>
+      calls
+        .filter((c) => c.status === "pending" || c.status === "failed")
+        .map((c) => c.recording_id),
+    [calls]
+  );
+
+  // Auto-sync on mount
+  useEffect(() => {
+    if (!hasAutoSynced.current) {
+      hasAutoSynced.current = true;
+      startSync();
+    }
+  }, [startSync]);
 
   // Refetch after sync completes
   useEffect(() => {
@@ -28,11 +46,29 @@ export default function Dashboard() {
     }
   }, [syncing, syncResult, refetch]);
 
-  // Refetch after processing completes
+  // Auto-process pending recordings after first sync + refetch completes
+  useEffect(() => {
+    if (
+      !hasAutoProcessed.current &&
+      !syncing &&
+      syncResult !== null &&
+      !loading &&
+      pendingIds.length > 0 &&
+      !processing
+    ) {
+      hasAutoProcessed.current = true;
+      startProcess(pendingIds);
+    }
+  }, [syncing, syncResult, loading, pendingIds, processing, startProcess]);
+
+  // Refetch after each recording completes so the table updates in real time
+  // Debounce to avoid hammering Supabase when processing many recordings
+  const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const lastEvent = processEvents[processEvents.length - 1];
-    if (lastEvent?.type === "done") {
-      refetch();
+    if (lastEvent?.type === "done" || lastEvent?.type === "fatal") {
+      if (refetchTimer.current) clearTimeout(refetchTimer.current);
+      refetchTimer.current = setTimeout(() => refetch(), 500);
     }
   }, [processEvents, refetch]);
 
@@ -44,12 +80,10 @@ export default function Dashboard() {
   );
 
   const handleProcessAll = useCallback(() => {
-    startProcess();
-  }, [startProcess]);
+    startProcess(pendingIds);
+  }, [startProcess, pendingIds]);
 
-  const pendingCount = calls.filter(
-    (c) => c.status === "pending" || c.status === "failed"
-  ).length;
+  const pendingCount = pendingIds.length;
 
   const filtered = applyFilters(calls, filters);
 

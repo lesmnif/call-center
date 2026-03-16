@@ -109,7 +109,9 @@ export function CallsTable({ calls, onProcess }: Props) {
                   </TableCell>
                   <TableCell className="text-sm whitespace-nowrap">
                     {isDone
-                      ? (call.customer_name ?? "—")
+                      ? call.customer_name
+                        ? call.customer_name
+                        : <span className="font-mono text-xs text-muted-foreground">{call.caller_phone ?? "—"}</span>
                       : call.caller_phone
                       ? <span className="font-mono text-xs text-muted-foreground">{call.caller_phone}</span>
                       : "—"}

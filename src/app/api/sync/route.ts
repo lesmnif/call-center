@@ -33,21 +33,12 @@ export async function POST(_req: NextRequest) {
           callee_phone: r.callee_phone,
           agent_name: r.agent_name,
         })),
-        { onConflict: "recording_id" }
+        { onConflict: "recording_id", ignoreDuplicates: false }
       );
       if (error) throw new Error(`Supabase upsert: ${error.message}`);
     }
 
-    return NextResponse.json({
-      new: newCount,
-      total: allRecordings.length,
-      sample: allRecordings.slice(0, 3).map((r) => ({
-        recording_id: r.recording_id,
-        agent_name: r.agent_name,
-        caller_phone: r.caller_phone,
-        callee_phone: r.callee_phone,
-      })),
-    });
+    return NextResponse.json({ new: newCount, total: allRecordings.length });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },
