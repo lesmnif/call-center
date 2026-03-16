@@ -24,13 +24,20 @@ export default function Dashboard() {
   const { calls, loading, refetch } = useCalls();
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const hasAutoSynced = useRef(false);
-  const hasAutoProcessed = useRef(false);
+  const autoDispatchedIds = useRef<Set<number>>(new Set());
 
+  // All actionable calls — used for the manual Analyze button (includes failed so user can retry)
   const pendingIds = useMemo(
     () =>
       calls
         .filter((c) => c.status === "pending" || c.status === "failed")
         .map((c) => c.recording_id),
+    [calls]
+  );
+
+  // Only truly unanalyzed calls — used for auto-dispatch (excludes failed to prevent retry loops)
+  const autoPendingIds = useMemo(
+    () => calls.filter((c) => c.status === "pending").map((c) => c.recording_id),
     [calls]
   );
 
@@ -47,26 +54,33 @@ export default function Dashboard() {
     }
   }, [syncing, syncResult, refetch]);
 
+  // Auto-dispatch: runs whenever sync is done + not loading + not processing.
+  // Uses autoPendingIds (status==='pending' only) so failed calls never loop.
+  // autoDispatchedIds tracks which IDs were sent to avoid double-dispatch within a session.
   useEffect(() => {
-    if (
-      !hasAutoProcessed.current &&
-      !syncing &&
-      syncResult !== null &&
-      !loading &&
-      pendingIds.length > 0 &&
-      !processing
-    ) {
-      hasAutoProcessed.current = true;
-      startProcess(pendingIds);
+    if (!syncing && syncResult !== null && !loading && !processing) {
+      const undispatched = autoPendingIds.filter(
+        (id) => !autoDispatchedIds.current.has(id)
+      );
+      if (undispatched.length > 0) {
+        undispatched.forEach((id) => autoDispatchedIds.current.add(id));
+        startProcess(undispatched);
+      }
     }
-  }, [syncing, syncResult, loading, pendingIds, processing, startProcess]);
+  }, [syncing, syncResult, loading, autoPendingIds, processing, startProcess]);
 
+  // After each processing run ends: refetch, then reset dispatched tracking
+  // so any calls that are still 'pending' (missed for any reason) get picked up.
   const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const lastEvent = processEvents[processEvents.length - 1];
     if (lastEvent?.type === "done" || lastEvent?.type === "fatal") {
       if (refetchTimer.current) clearTimeout(refetchTimer.current);
-      refetchTimer.current = setTimeout(() => refetch(), 500);
+      refetchTimer.current = setTimeout(() => {
+        // Clear only — failed calls won't re-enter because they're excluded from autoPendingIds
+        autoDispatchedIds.current.clear();
+        refetch();
+      }, 500);
     }
   }, [processEvents, refetch]);
 
