@@ -24,6 +24,7 @@ export type FilterState = {
   agent: string;
   category: string;
   sentiment: string;
+  outcome: string;
   dateRange: "all" | "today" | "7d" | "30d";
   timeSort: "desc" | "asc";
 };
@@ -111,6 +112,12 @@ const SENTIMENTS = [
   { value: "negative", label: "Negative", color: "oklch(0.56 0.21 20)"  },
 ];
 
+const OUTCOMES = [
+  { value: "resolved",         label: "Resolved",   color: "oklch(0.59 0.17 148)" },
+  { value: "follow_up_needed", label: "Follow-up",  color: "oklch(0.60 0.17 60)"  },
+  { value: "escalated",        label: "Escalated",  color: "oklch(0.56 0.21 20)"  },
+];
+
 export function Filters({ calls, filters, onChange }: Props) {
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -140,6 +147,7 @@ export function Filters({ calls, filters, onChange }: Props) {
     filters.agent !== ALL,
     filters.category !== ALL,
     filters.sentiment !== ALL,
+    filters.outcome !== ALL,
     filters.dateRange !== "all",
   ].filter(Boolean).length;
 
@@ -179,6 +187,12 @@ export function Filters({ calls, filters, onChange }: Props) {
         value={filters.agent}
         onValueChange={(v) => onChange({ ...filters, agent: v })}
         options={agents.sort().map((a) => ({ value: a, label: a }))}
+      />
+      <FilterCombobox
+        label="Outcome"
+        value={filters.outcome}
+        onValueChange={(v) => onChange({ ...filters, outcome: v })}
+        options={OUTCOMES.map((o) => ({ value: o.value, label: o.label }))}
       />
       <FilterCombobox
         label="Category"
@@ -259,7 +273,7 @@ export function Filters({ calls, filters, onChange }: Props) {
           <div className="h-5 w-px bg-border" />
           <button
             onClick={() =>
-              onChange({ search: "", store: ALL, agent: ALL, category: ALL, sentiment: ALL, dateRange: "all", timeSort: filters.timeSort })
+              onChange({ search: "", store: ALL, agent: ALL, category: ALL, sentiment: ALL, outcome: ALL, dateRange: "all", timeSort: filters.timeSort })
             }
             className="h-8 px-2.5 text-xs text-muted-foreground/50 hover:text-foreground/70 transition-colors flex items-center gap-1 cursor-pointer"
           >
@@ -274,20 +288,27 @@ export function Filters({ calls, filters, onChange }: Props) {
 
 export function applyFilters(calls: CallRecord[], filters: FilterState): CallRecord[] {
   return calls.filter((c) => {
-    if (
-      filters.search &&
-      !(
-        c.transcript?.toLowerCase().includes(filters.search.toLowerCase()) ||
-        c.summary?.toLowerCase().includes(filters.search.toLowerCase()) ||
-        c.customer_name?.toLowerCase().includes(filters.search.toLowerCase()) ||
-        c.agent_name?.toLowerCase().includes(filters.search.toLowerCase())
+    if (filters.search) {
+      const q = filters.search.toLowerCase();
+      // Map outcome values to human labels for search matching
+      const outcomeLabel = c.outcome === "follow_up_needed" ? "follow up" : (c.outcome ?? "");
+      if (
+        !(
+          c.transcript?.toLowerCase().includes(q) ||
+          c.summary?.toLowerCase().includes(q) ||
+          c.customer_name?.toLowerCase().includes(q) ||
+          c.agent_name?.toLowerCase().includes(q) ||
+          c.outcome?.toLowerCase().includes(q) ||
+          outcomeLabel.includes(q)
+        )
       )
-    )
-      return false;
+        return false;
+    }
     if (filters.store !== ALL && c.store !== filters.store) return false;
     if (filters.agent !== ALL && c.agent_name !== filters.agent) return false;
     if (filters.category !== ALL && c.category !== filters.category) return false;
     if (filters.sentiment !== ALL && c.sentiment !== filters.sentiment) return false;
+    if (filters.outcome !== ALL && c.outcome !== filters.outcome) return false;
 
     if (filters.dateRange !== "all") {
       const startTime = c.start_time;

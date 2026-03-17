@@ -14,6 +14,7 @@ const DEFAULT_FILTERS: FilterState = {
   agent: "__all__",
   category: "__all__",
   sentiment: "__all__",
+  outcome: "__all__",
   dateRange: "all",
   timeSort: "desc",
 };
@@ -102,6 +103,7 @@ export default function Dashboard() {
     filters.agent !== "__all__" ||
     filters.category !== "__all__" ||
     filters.sentiment !== "__all__" ||
+    filters.outcome !== "__all__" ||
     filters.dateRange !== "all";
 
   return (
