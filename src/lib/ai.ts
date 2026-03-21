@@ -58,9 +58,68 @@ export type AnalysisResult = {
   key_points: string[];
   action_items: string[];
   language: string | null;
+  sale_completed: boolean | null;
+  upsell_attempted: boolean | null;
+  had_sales_opportunity: boolean | null;
+  revenue: number | null;
+  efficiency_score: number | null;
+  communication_score: number | null;
+  resolution_score: number | null;
+  score_reasoning: string | null;
+  improvement_notes: string | null;
+  upsell_opportunities: string | null;
+};
+
+export type JunkResult = {
+  is_junk: boolean;
+  reason: string | null;
 };
 
 // --- API calls ---
+
+const JUNK_DETECT_PROMPT = `You are a call center transcript classifier. Determine if this transcript is a JUNK call or a REAL call.
+
+JUNK calls include:
+- Voicemail recordings (automated greeting, beep, no two-way conversation)
+- IVR / automated menu systems with no human interaction
+- Missed calls / dead air / silence transcribed as a few words or nothing
+- Robocalls or spam recordings
+- Hold music transcribed as repetitive text
+- One-sided recordings where only an automated system speaks
+
+REAL calls include:
+- Any call with a two-way conversation between a human agent and a customer, even if brief
+- Calls where a customer speaks to an agent, even if the call is short or unproductive
+
+Respond with JSON: {"is_junk": true/false, "reason": "brief explanation if junk, null if real"}`;
+
+export async function detectJunk(
+  transcript: string,
+): Promise<JunkResult> {
+  return withRetry(async () => {
+    const response = await getOpenAI().chat.completions.create({
+      model: "gpt-5-mini",
+      messages: [
+        { role: "system", content: JUNK_DETECT_PROMPT },
+        { role: "user", content: transcript },
+      ],
+      response_format: { type: "json_object" },
+    });
+
+    const content = response.choices[0].message.content ?? "";
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      // If JSON parsing fails, treat as real call (don't skip)
+      return { is_junk: false, reason: null };
+    }
+    return {
+      is_junk: parsed.is_junk === true,
+      reason: typeof parsed.reason === "string" ? parsed.reason : null,
+    };
+  });
+}
 
 export async function transcribe(
   wavBuffer: ArrayBuffer,
@@ -127,6 +186,16 @@ export async function analyze(
           key_points: parsed.key_points ?? [],
           action_items: parsed.action_items ?? [],
           language: parsed.language ?? null,
+          sale_completed: parsed.sale_completed ?? null,
+          upsell_attempted: parsed.upsell_attempted ?? null,
+          had_sales_opportunity: parsed.had_sales_opportunity ?? null,
+          revenue: parsed.revenue != null ? Number(parsed.revenue) : null,
+          efficiency_score: parsed.efficiency_score != null ? Number(parsed.efficiency_score) : null,
+          communication_score: parsed.communication_score != null ? Number(parsed.communication_score) : null,
+          resolution_score: parsed.resolution_score != null ? Number(parsed.resolution_score) : null,
+          score_reasoning: typeof parsed.score_reasoning === "string" ? parsed.score_reasoning : null,
+          improvement_notes: typeof parsed.improvement_notes === "string" ? parsed.improvement_notes : null,
+          upsell_opportunities: typeof parsed.upsell_opportunities === "string" ? parsed.upsell_opportunities : null,
         },
         inputTokens: response.usage?.prompt_tokens ?? 0,
         outputTokens: response.usage?.completion_tokens ?? 0,

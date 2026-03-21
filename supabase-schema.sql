@@ -21,7 +21,20 @@ create table if not exists calls (
   key_points      jsonb default '[]'::jsonb,
   action_items    jsonb default '[]'::jsonb,
   language        text,
-  processed_at    timestamptz default now()
+  processed_at    timestamptz default now(),
+  duration_seconds    integer,
+  sale_completed      boolean,
+  upsell_attempted    boolean,
+  had_sales_opportunity boolean,
+  revenue             numeric(10,2),
+  efficiency_score    smallint,
+  communication_score smallint,
+  resolution_score    smallint,
+  score_reasoning     text,
+  improvement_notes   text,
+  status              text default 'pending',
+  skip_reason         text,
+  upsell_opportunities text
 );
 
 create index if not exists idx_calls_recording_id on calls(recording_id);

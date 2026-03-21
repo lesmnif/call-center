@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown, SearchX } from "lucide-react";
 import { type CallRecord } from "@/lib/supabase";
+import { TZ, todayPacific, dateToPacificStr } from "@/lib/timezone";
 import { CallDetail } from "./call-detail";
 
 type Props = {
@@ -32,21 +33,21 @@ const SENTIMENT_ORDER: Record<string, number> = { positive: 0, neutral: 1, negat
 function formatDate(t: string | null) {
   if (!t) return { top: "—", bottom: "" };
   const d = new Date(t);
-  const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  const isYesterday =
-    d.toDateString() === new Date(now.getTime() - 86400000).toDateString();
+  const dateStr = dateToPacificStr(d);
+  const today = todayPacific();
+  const yesterday = dateToPacificStr(new Date(Date.now() - 86400000));
 
   const timeStr = d.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    timeZone: TZ,
   });
 
-  if (isToday) return { top: "Today", bottom: timeStr };
-  if (isYesterday) return { top: "Yesterday", bottom: timeStr };
+  if (dateStr === today) return { top: "Today", bottom: timeStr };
+  if (dateStr === yesterday) return { top: "Yesterday", bottom: timeStr };
   return {
-    top: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    top: d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: TZ }),
     bottom: timeStr,
   };
 }
@@ -222,6 +223,11 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
                     {top}
                   </span>
                   <span className="text-[10px] font-mono text-muted-foreground/45 leading-none">{bottom}</span>
+                  {isDone && call.duration_seconds != null && (
+                    <span className="text-[9px] font-mono text-muted-foreground/30 leading-none">
+                      {Math.floor(call.duration_seconds / 60)}:{(call.duration_seconds % 60).toString().padStart(2, "0")}
+                    </span>
+                  )}
                   {isProcessing && (
                     <span className="flex items-center gap-1 mt-1.5">
                       <span className="relative flex h-1.5 w-1.5">
@@ -238,9 +244,33 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
                 {/* Summary — hero */}
                 <div className="px-4 py-4 flex flex-col justify-center min-w-0">
                   {isDone && call.summary ? (
-                    <p className="text-[13px] text-foreground/85 leading-relaxed line-clamp-2 group-hover:text-foreground transition-colors">
-                      {call.summary}
-                    </p>
+                    <div className="space-y-1">
+                      <p className="text-[13px] text-foreground/85 leading-relaxed line-clamp-2 group-hover:text-foreground transition-colors">
+                        {call.summary}
+                      </p>
+                      {(call.revenue != null && call.revenue > 0 || call.upsell_attempted || (call.upsell_opportunities && !call.upsell_attempted)) && (
+                        <div className="flex items-center gap-1.5">
+                          {call.revenue != null && call.revenue > 0 && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                              style={{ color: "oklch(0.46 0.17 148)", background: "oklch(0.59 0.17 148 / 0.1)" }}>
+                              ${call.revenue.toFixed(2)}
+                            </span>
+                          )}
+                          {call.upsell_attempted && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                              style={{ color: "oklch(0.50 0.17 275)", background: "oklch(0.56 0.23 275 / 0.1)" }}>
+                              Upsell
+                            </span>
+                          )}
+                          {call.upsell_opportunities && !call.upsell_attempted && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                              style={{ color: "oklch(0.55 0.17 60)", background: "oklch(0.60 0.17 60 / 0.1)" }}>
+                              Missed Upsell
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   ) : isProcessing ? (
                     <div className="space-y-1.5 py-0.5">
                       <div className="h-3 shimmer rounded-md w-4/5" />

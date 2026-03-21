@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ThreeCXClient } from "@/lib/three-cx-client";
-import { transcribe, analyze } from "@/lib/ai";
+import { transcribe, analyze, detectJunk } from "@/lib/ai";
 import { getSupabaseServer } from "@/lib/supabase";
 
 export const maxDuration = 300;
@@ -32,6 +32,7 @@ export async function GET(req: NextRequest) {
           caller_phone: r.caller_phone,
           callee_phone: r.callee_phone,
           agent_name: r.agent_name,
+          duration_seconds: r.duration_seconds,
         })),
         { onConflict: "recording_id", ignoreDuplicates: false }
       );
@@ -44,7 +45,7 @@ export async function GET(req: NextRequest) {
   // Phase 2: Pick the oldest pending/failed recordings
   const { data: targets, error: fetchError } = await supabase
     .from("calls")
-    .select("recording_id, start_time, caller_phone, callee_phone, agent_name")
+    .select("recording_id, start_time, caller_phone, callee_phone, agent_name, duration_seconds")
     .in("status", ["pending", "failed"])
     .order("start_time", { ascending: true }) // oldest first
     .limit(BATCH_SIZE);
@@ -64,6 +65,21 @@ export async function GET(req: NextRequest) {
     const recId = recording.recording_id;
 
     try {
+      // Duration-based junk call filter — skip calls < 30s
+      const duration = recording.duration_seconds;
+      if (duration != null && duration < 30) {
+        console.log(`[cron] Skipped ${recId}: duration ${duration}s < 30s`);
+        await supabase.from("calls").upsert(
+          {
+            recording_id: recId,
+            status: "skipped",
+            skip_reason: `Too short (${duration}s) — likely missed/voicemail`,
+          },
+          { onConflict: "recording_id" }
+        );
+        continue;
+      }
+
       // Atomically claim — skip if another process already picked it up
       const { data: claimed } = await supabase
         .from("calls")
@@ -76,6 +92,23 @@ export async function GET(req: NextRequest) {
 
       const wavBuffer = await cx.downloadRecording(recId);
       const { text: transcript } = await transcribe(wavBuffer);
+
+      // Junk detection — cheap check before expensive analysis
+      const junkResult = await detectJunk(transcript);
+      if (junkResult.is_junk) {
+        console.log(`[cron] Skipped ${recId}: ${junkResult.reason}`);
+        await supabase.from("calls").upsert(
+          {
+            recording_id: recId,
+            status: "skipped",
+            skip_reason: junkResult.reason ?? "Junk call detected by AI",
+            transcript,
+          },
+          { onConflict: "recording_id" }
+        );
+        continue;
+      }
+
       const { analysis } = await analyze(transcript);
 
       await supabase.from("calls").upsert(
@@ -100,6 +133,16 @@ export async function GET(req: NextRequest) {
           key_points: analysis.key_points,
           action_items: analysis.action_items,
           language: analysis.language,
+          sale_completed: analysis.sale_completed,
+          upsell_attempted: analysis.upsell_attempted,
+          had_sales_opportunity: analysis.had_sales_opportunity,
+          revenue: analysis.revenue,
+          efficiency_score: analysis.efficiency_score,
+          communication_score: analysis.communication_score,
+          resolution_score: analysis.resolution_score,
+          score_reasoning: analysis.score_reasoning,
+          improvement_notes: analysis.improvement_notes,
+          upsell_opportunities: analysis.upsell_opportunities,
           processed_at: new Date().toISOString(),
         },
         { onConflict: "recording_id" }

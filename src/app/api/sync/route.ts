@@ -40,6 +40,7 @@ export async function POST(_req: NextRequest) {
           caller_phone: r.caller_phone,
           callee_phone: r.callee_phone,
           agent_name: r.agent_name,
+          duration_seconds: r.duration_seconds,
         })),
         { onConflict: "recording_id", ignoreDuplicates: false }
       );

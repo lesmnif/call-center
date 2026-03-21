@@ -7,6 +7,7 @@ import { SyncBar } from "@/components/sync-bar";
 import { StatsRow } from "@/components/stats-row";
 import { Filters, applyFilters, type FilterState } from "@/components/filters";
 import { CallsTable } from "@/components/calls-table";
+import { AgentScorecard } from "@/components/agent-scorecard";
 
 const DEFAULT_FILTERS: FilterState = {
   search: "",
@@ -15,6 +16,7 @@ const DEFAULT_FILTERS: FilterState = {
   category: "__all__",
   sentiment: "__all__",
   outcome: "__all__",
+  salesActivity: "__all__",
   dateRange: "all",
   timeSort: "desc",
 };
@@ -24,10 +26,14 @@ export default function Dashboard() {
   const { processing, events: processEvents, progress, startProcess } = useProcess();
   const { calls, loading, refetch } = useCalls();
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  const [view, setView] = useState<"calls" | "agents">("calls");
   const hasAutoSynced = useRef(false);
   const autoDispatchedIds = useRef<Set<number>>(new Set());
 
   // All actionable calls — used for the manual Analyze button (includes failed so user can retry)
+  // Filter out skipped calls from all UI components
+  const activeCalls = useMemo(() => calls.filter(c => c.status !== "skipped"), [calls]);
+
   const pendingIds = useMemo(
     () =>
       calls
@@ -36,9 +42,15 @@ export default function Dashboard() {
     [calls]
   );
 
-  // Only truly unanalyzed calls — used for auto-dispatch (excludes failed to prevent retry loops)
+  // Pending calls for auto-dispatch (primary priority)
   const autoPendingIds = useMemo(
     () => calls.filter((c) => c.status === "pending").map((c) => c.recording_id),
+    [calls]
+  );
+
+  // Failed calls — retried automatically after all pending are done
+  const autoFailedIds = useMemo(
+    () => calls.filter((c) => c.status === "failed").map((c) => c.recording_id),
     [calls]
   );
 
@@ -55,20 +67,30 @@ export default function Dashboard() {
     }
   }, [syncing, syncResult, refetch]);
 
-  // Auto-dispatch: runs whenever sync is done + not loading + not processing.
-  // Uses autoPendingIds (status==='pending' only) so failed calls never loop.
+  // Auto-dispatch: pending first, then retry failed once pending are exhausted.
   // autoDispatchedIds tracks which IDs were sent to avoid double-dispatch within a session.
   useEffect(() => {
     if (!syncing && syncResult !== null && !loading && !processing) {
-      const undispatched = autoPendingIds.filter(
+      // First: dispatch any undispatched pending calls
+      const undispatchedPending = autoPendingIds.filter(
         (id) => !autoDispatchedIds.current.has(id)
       );
-      if (undispatched.length > 0) {
-        undispatched.forEach((id) => autoDispatchedIds.current.add(id));
-        startProcess(undispatched);
+      if (undispatchedPending.length > 0) {
+        undispatchedPending.forEach((id) => autoDispatchedIds.current.add(id));
+        startProcess(undispatchedPending);
+        return;
+      }
+
+      // Then: retry failed calls that haven't been dispatched yet
+      const undispatchedFailed = autoFailedIds.filter(
+        (id) => !autoDispatchedIds.current.has(id)
+      );
+      if (undispatchedFailed.length > 0) {
+        undispatchedFailed.forEach((id) => autoDispatchedIds.current.add(id));
+        startProcess(undispatchedFailed);
       }
     }
-  }, [syncing, syncResult, loading, autoPendingIds, processing, startProcess]);
+  }, [syncing, syncResult, loading, autoPendingIds, autoFailedIds, processing, startProcess]);
 
   // After each processing run ends: refetch, then reset dispatched tracking
   // so any calls that are still 'pending' (missed for any reason) get picked up.
@@ -96,7 +118,7 @@ export default function Dashboard() {
   );
 
   const pendingCount = pendingIds.length;
-  const filtered = applyFilters(calls, filters);
+  const filtered = applyFilters(activeCalls, filters);
   const hasActiveFilters =
     filters.search !== "" ||
     filters.store !== "__all__" ||
@@ -104,6 +126,7 @@ export default function Dashboard() {
     filters.category !== "__all__" ||
     filters.sentiment !== "__all__" ||
     filters.outcome !== "__all__" ||
+    filters.salesActivity !== "__all__" ||
     filters.dateRange !== "all";
 
   return (
@@ -169,29 +192,56 @@ export default function Dashboard() {
           />
         </BlurFade>
 
+        {/* View toggle */}
         <BlurFade delay={0.10} duration={0.45}>
-          <StatsRow calls={calls} />
-        </BlurFade>
-
-        <BlurFade delay={0.15} duration={0.45}>
-          <div className="space-y-2.5">
-            <Filters calls={calls} filters={filters} onChange={setFilters} />
-            <div className="flex items-center gap-2 pl-0.5">
-              <p className="text-xs font-mono text-muted-foreground/50 tabular-nums">
-                {filtered.length === calls.length
-                  ? `${calls.length.toLocaleString()} calls`
-                  : `${filtered.length.toLocaleString()} of ${calls.length.toLocaleString()}`}
-              </p>
-              {filtered.length !== calls.length && (
-                <span className="text-xs font-mono text-muted-foreground/35">· filtered</span>
-              )}
-            </div>
+          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/60 w-fit">
+            {(["calls", "agents"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  view === v
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground/60 hover:text-muted-foreground"
+                }`}
+              >
+                {v === "calls" ? "Calls" : "Agents"}
+              </button>
+            ))}
           </div>
         </BlurFade>
 
-        <BlurFade delay={0.20} duration={0.45}>
-          <CallsTable calls={filtered} onProcess={handleProcessOne} isFiltered={hasActiveFilters} timeSort={filters.timeSort} />
-        </BlurFade>
+        {view === "calls" ? (
+          <>
+            <BlurFade delay={0.12} duration={0.45}>
+              <StatsRow calls={activeCalls} />
+            </BlurFade>
+
+            <BlurFade delay={0.17} duration={0.45}>
+              <div className="space-y-2.5">
+                <Filters calls={activeCalls} filters={filters} onChange={setFilters} />
+                <div className="flex items-center gap-2 pl-0.5">
+                  <p className="text-xs font-mono text-muted-foreground/50 tabular-nums">
+                    {filtered.length === activeCalls.length
+                      ? `${activeCalls.length.toLocaleString()} calls`
+                      : `${filtered.length.toLocaleString()} of ${activeCalls.length.toLocaleString()}`}
+                  </p>
+                  {filtered.length !== activeCalls.length && (
+                    <span className="text-xs font-mono text-muted-foreground/35">· filtered</span>
+                  )}
+                </div>
+              </div>
+            </BlurFade>
+
+            <BlurFade delay={0.22} duration={0.45}>
+              <CallsTable calls={filtered} onProcess={handleProcessOne} isFiltered={hasActiveFilters} timeSort={filters.timeSort} />
+            </BlurFade>
+          </>
+        ) : (
+          <BlurFade delay={0.12} duration={0.45}>
+            <AgentScorecard calls={activeCalls} onProcess={handleProcessOne} />
+          </BlurFade>
+        )}
 
       </main>
     </div>

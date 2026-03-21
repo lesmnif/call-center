@@ -79,6 +79,7 @@ export type RawRecording = {
   caller_phone: string | null;
   callee_phone: string | null;
   agent_name: string | null;
+  duration_seconds: number | null;
 };
 
 function parseParticipant(bytes: Uint8Array): {
@@ -138,6 +139,7 @@ export function parseRecordingsResponse(
       caller_phone: null,
       callee_phone: null,
       agent_name: null,
+      duration_seconds: null,
     };
 
     // field[3]: {f1: start_unix_seconds, f2: duration_microseconds}
@@ -147,8 +149,12 @@ export function parseRecordingsResponse(
       const ts = tsFields.get(1)?.[0];
       if (typeof ts === "number" && ts > 1_000_000_000) {
         rec.start_time = new Date(ts * 1000).toISOString();
-        break;
       }
+      const dur = tsFields.get(2)?.[0];
+      if (typeof dur === "number" && dur > 0) {
+        rec.duration_seconds = Math.round(dur / 1_000_000);
+      }
+      if (rec.start_time) break;
     }
 
     // field[5]: participant sub-messages (one per party)
