@@ -27,7 +27,8 @@ export type FilterState = {
   sentiment: string;
   outcome: string;
   salesActivity: string;
-  dateRange: "all" | "today" | "7d" | "30d";
+  orderType: string;
+  dateRange: "all" | "today" | "yesterday" | "3d" | "5d";
   timeSort: "desc" | "asc";
 };
 
@@ -40,10 +41,11 @@ type Props = {
 const ALL = "__all__";
 
 const DATE_RANGES: { value: FilterState["dateRange"]; label: string }[] = [
-  { value: "all",   label: "All time" },
-  { value: "today", label: "Today"    },
-  { value: "7d",    label: "7 days"   },
-  { value: "30d",   label: "30 days"  },
+  { value: "all",       label: "All time"   },
+  { value: "today",     label: "Today"      },
+  { value: "yesterday", label: "Yesterday"  },
+  { value: "3d",        label: "3 days"     },
+  { value: "5d",        label: "5 days"     },
 ];
 
 function FilterCombobox({
@@ -151,6 +153,7 @@ export function Filters({ calls, filters, onChange }: Props) {
     filters.sentiment !== ALL,
     filters.outcome !== ALL,
     filters.salesActivity !== ALL,
+    filters.orderType !== ALL,
     filters.dateRange !== "all",
   ].filter(Boolean).length;
 
@@ -215,6 +218,16 @@ export function Filters({ calls, filters, onChange }: Props) {
           { value: "upsell_attempted", label: "Upsell Attempted" },
           { value: "missed_upsell", label: "Missed Upsell" },
           { value: "no_sale", label: "No Sale" },
+        ]}
+      />
+      <FilterCombobox
+        label="Order Type"
+        value={filters.orderType}
+        onValueChange={(v) => onChange({ ...filters, orderType: v })}
+        options={[
+          { value: "Pickup", label: "Pickup" },
+          { value: "Delivery", label: "Delivery" },
+          { value: "Express Delivery", label: "Express Delivery" },
         ]}
       />
 
@@ -287,7 +300,7 @@ export function Filters({ calls, filters, onChange }: Props) {
           <div className="h-5 w-px bg-border" />
           <button
             onClick={() =>
-              onChange({ search: "", store: ALL, agent: ALL, category: ALL, sentiment: ALL, outcome: ALL, salesActivity: ALL, dateRange: "all", timeSort: filters.timeSort })
+              onChange({ search: "", store: ALL, agent: ALL, category: ALL, sentiment: ALL, outcome: ALL, salesActivity: ALL, orderType: ALL, dateRange: "all", timeSort: filters.timeSort })
             }
             className="h-8 px-2.5 text-xs text-muted-foreground/50 hover:text-foreground/70 transition-colors flex items-center gap-1 cursor-pointer"
           >
@@ -323,6 +336,7 @@ export function applyFilters(calls: CallRecord[], filters: FilterState): CallRec
     if (filters.category !== ALL && c.category !== filters.category) return false;
     if (filters.sentiment !== ALL && c.sentiment !== filters.sentiment) return false;
     if (filters.outcome !== ALL && c.outcome !== filters.outcome) return false;
+    if (filters.orderType !== ALL && c.order_type !== filters.orderType) return false;
     if (filters.salesActivity !== ALL) {
       if (filters.salesActivity === "has_sale" && !(c.revenue != null && c.revenue > 0)) return false;
       if (filters.salesActivity === "upsell_attempted" && !c.upsell_attempted) return false;
@@ -333,11 +347,14 @@ export function applyFilters(calls: CallRecord[], filters: FilterState): CallRec
     if (filters.dateRange !== "all") {
       const startTime = c.start_time;
       if (!startTime) return false;
+      const pacificDate = dateToPacificStr(new Date(startTime));
       if (filters.dateRange === "today") {
-        const today = todayPacific();
-        if (dateToPacificStr(new Date(startTime)) !== today) return false;
+        if (pacificDate !== todayPacific()) return false;
+      } else if (filters.dateRange === "yesterday") {
+        const yesterday = dateToPacificStr(new Date(Date.now() - 86_400_000));
+        if (pacificDate !== yesterday) return false;
       } else {
-        const days = filters.dateRange === "7d" ? 7 : 30;
+        const days = filters.dateRange === "3d" ? 3 : 5;
         const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
         if (startTime < cutoff) return false;
       }

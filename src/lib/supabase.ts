@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 export type CallRecord = {
   id?: number;
   recording_id: number;
-  status: 'pending' | 'processing' | 'done' | 'failed' | 'skipped';
+  status: 'pending' | 'processing' | 'done' | 'failed' | 'skipped' | 'permanently_failed';
   start_time: string | null;
   caller_phone: string | null;
   callee_phone: string | null;
@@ -35,6 +35,8 @@ export type CallRecord = {
   improvement_notes: string | null;
   skip_reason: string | null;
   upsell_opportunities: string | null;
+  retry_count: number;
+  processing_started_at: string | null;
 };
 
 export function getSupabaseServer() {

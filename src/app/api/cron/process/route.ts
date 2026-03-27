@@ -8,6 +8,7 @@ export const maxDuration = 300;
 // Number of recordings to process per cron run.
 // Keep low enough that the total fits within maxDuration.
 const BATCH_SIZE = 2;
+const MAX_RETRIES = 2;
 
 export async function GET(req: NextRequest) {
   // Vercel automatically sends Authorization: Bearer <CRON_SECRET>
@@ -45,7 +46,7 @@ export async function GET(req: NextRequest) {
   // Phase 2: Pick the oldest pending/failed recordings
   const { data: targets, error: fetchError } = await supabase
     .from("calls")
-    .select("recording_id, start_time, caller_phone, callee_phone, agent_name, duration_seconds")
+    .select("recording_id, start_time, caller_phone, callee_phone, agent_name, duration_seconds, retry_count")
     .in("status", ["pending", "failed"])
     .order("start_time", { ascending: true }) // oldest first
     .limit(BATCH_SIZE);
@@ -151,9 +152,12 @@ export async function GET(req: NextRequest) {
       processed++;
     } catch {
       failed++;
+      const currentRetry = (recording as { retry_count?: number }).retry_count ?? 0;
+      const nextRetry = currentRetry + 1;
+      const newStatus = nextRetry >= MAX_RETRIES ? "permanently_failed" : "failed";
       await supabase
         .from("calls")
-        .update({ status: "failed" })
+        .update({ status: newStatus, retry_count: nextRetry })
         .eq("recording_id", recId)
         .then(() => {}, () => {});
     }

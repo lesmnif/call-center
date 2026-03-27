@@ -97,8 +97,18 @@ export function StatsRow({ calls }: Props) {
     return Math.round(withDuration.reduce((s, c) => s + c.duration_seconds!, 0) / withDuration.length);
   }, [calls]);
 
+  const orderTypeStats = useMemo(() => {
+    const doneCalls = calls.filter(c => c.status === "done" && c.order_type);
+    const pickup = doneCalls.filter(c => c.order_type === "Pickup");
+    const delivery = doneCalls.filter(c => c.order_type === "Delivery" || c.order_type === "Express Delivery");
+    const pickupRevenue = pickup.reduce((s, c) => s + (c.revenue ?? 0), 0);
+    const deliveryRevenue = delivery.reduce((s, c) => s + (c.revenue ?? 0), 0);
+    const totalCount = pickup.length + delivery.length;
+    return { pickup: pickup.length, delivery: delivery.length, pickupRevenue, deliveryRevenue, totalCount };
+  }, [calls]);
+
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
 
       {/* Total Calls */}
       <div className="bg-card rounded-xl card-elevated p-5 flex flex-col gap-3">
@@ -238,6 +248,56 @@ export function StatsRow({ calls }: Props) {
                     />
                   </div>
                   <span className="text-[10px] font-mono tabular-nums text-foreground/60 w-5 text-right">{b.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center flex-1 min-h-[68px]">
+            <p className="text-sm text-muted-foreground/30 font-mono">no data</p>
+          </div>
+        )}
+      </div>
+
+      {/* Delivery vs Pickup */}
+      <div className="bg-card rounded-xl card-elevated p-5 flex flex-col gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
+          Order Type
+        </p>
+        {orderTypeStats.totalCount > 0 ? (
+          <div className="flex flex-col gap-2.5">
+            {/* Proportional bar */}
+            <div className="flex h-2 w-full rounded-full overflow-hidden gap-px">
+              <div
+                className="rounded-l-full transition-all duration-700"
+                style={{
+                  width: `${(orderTypeStats.pickup / orderTypeStats.totalCount) * 100}%`,
+                  background: "oklch(0.56 0.23 275)",
+                }}
+              />
+              <div
+                className="rounded-r-full transition-all duration-700"
+                style={{
+                  width: `${(orderTypeStats.delivery / orderTypeStats.totalCount) * 100}%`,
+                  background: "oklch(0.59 0.17 148)",
+                }}
+              />
+            </div>
+            {/* Legend */}
+            <div className="flex flex-col gap-1.5">
+              {[
+                { label: "Pickup", count: orderTypeStats.pickup, revenue: orderTypeStats.pickupRevenue, color: "oklch(0.56 0.23 275)" },
+                { label: "Delivery", count: orderTypeStats.delivery, revenue: orderTypeStats.deliveryRevenue, color: "oklch(0.59 0.17 148)" },
+              ].map((s) => (
+                <div key={s.label} className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: s.color }} />
+                  <span className="text-[11px] text-muted-foreground/60 flex-1">{s.label}</span>
+                  <span className="text-[11px] font-mono tabular-nums text-foreground/70">{s.count}</span>
+                  {s.revenue > 0 && (
+                    <span className="text-[10px] font-mono tabular-nums text-muted-foreground/40">
+                      ${Math.round(s.revenue).toLocaleString()}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>

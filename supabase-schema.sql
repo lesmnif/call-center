@@ -34,7 +34,9 @@ create table if not exists calls (
   improvement_notes   text,
   status              text default 'pending',
   skip_reason         text,
-  upsell_opportunities text
+  upsell_opportunities text,
+  retry_count         smallint default 0,
+  processing_started_at timestamptz
 );
 
 create index if not exists idx_calls_recording_id on calls(recording_id);

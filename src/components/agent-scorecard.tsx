@@ -3,12 +3,12 @@
 import { useMemo, useState } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown, ArrowLeft } from "lucide-react";
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from "recharts";
 import { type CallRecord } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { CallDetail } from "./call-detail";
-import { TZ } from "@/lib/timezone";
+import { TZ, todayPacific, dateToPacificStr } from "@/lib/timezone";
 import {
   TooltipProvider,
   Tooltip,
@@ -40,22 +40,28 @@ type AgentRow = {
   revenue: number;
   conversionRate: number;
   opportunities: number;
-  sparklineData: number[];
   calls: CallRecord[];
+  totalDuration: number;
+  avgDuration: number;
+  salesPerDay: number;
+  revenuePerHour: number;
+  revenuePerCall: number;
+  lowSample: boolean;
 };
+
+const MIN_CALLS_THRESHOLD = 5;
 
 type SortKey =
   | "name"
   | "callsHandled"
   | "compositeIndex"
-  | "avgEfficiency"
-  | "avgCommunication"
-  | "avgResolution"
   | "salesClosed"
-  | "upsellsAttempted"
   | "revenue"
-  | "missedUpsells"
-  | "conversionRate";
+  | "conversionRate"
+  | "totalDuration"
+  | "salesPerDay"
+  | "revenuePerHour"
+  | "revenuePerCall";
 
 type SortDir = "asc" | "desc";
 
@@ -79,10 +85,35 @@ const COLUMN_TOOLTIPS: Record<string, string> = {
   Calls: "Calls with full performance scoring",
   Sales: "Calls where a sale was completed",
   Revenue: "Total revenue from completed sales",
-  "Missed": "Calls with upsell opportunities that weren't attempted",
   "Conv %": "Sales closed / sales opportunities",
-  Trend: "Composite score trend for the last 10 scored calls",
+  Duration: "Total time on calls (avg per call)",
+  "Sales/Day": "Average sales closed per active day",
+  "$/hr": "Revenue generated per hour on calls",
+  "$/call": "Average revenue per call handled",
 };
+
+type AgentDateRange = "all" | "today" | "yesterday" | "3d" | "5d";
+
+const DATE_RANGES: { value: AgentDateRange; label: string }[] = [
+  { value: "all",       label: "All time"   },
+  { value: "today",     label: "Today"      },
+  { value: "yesterday", label: "Yesterday"  },
+  { value: "3d",        label: "3 days"     },
+  { value: "5d",        label: "5 days"     },
+];
+
+function filterCallsByDate(calls: CallRecord[], range: AgentDateRange): CallRecord[] {
+  if (range === "all") return calls;
+  return calls.filter((c) => {
+    if (!c.start_time) return false;
+    const pacificDate = dateToPacificStr(new Date(c.start_time));
+    if (range === "today") return pacificDate === todayPacific();
+    if (range === "yesterday") return pacificDate === dateToPacificStr(new Date(Date.now() - 86_400_000));
+    const days = range === "3d" ? 3 : 5;
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+    return c.start_time >= cutoff;
+  });
+}
 
 function avg(nums: number[]): number {
   if (nums.length === 0) return 0;
@@ -95,7 +126,6 @@ function needsCoaching(agent: AgentRow): boolean {
 }
 
 function buildAgentRows(calls: CallRecord[]): AgentRow[] {
-  // Only use calls that have all 3 performance scores — these are the "new" calls
   const scored = calls.filter(
     (c) => c.agent_name && c.status === "done" &&
       c.efficiency_score != null && c.communication_score != null && c.resolution_score != null
@@ -116,21 +146,23 @@ function buildAgentRows(calls: CallRecord[]): AgentRow[] {
     const avgRes = avg(agentCalls.map((c) => c.resolution_score!));
     const composite = (avgEff + avgComm + avgRes) / 3;
 
-    // Sparkline: last 10 composite scores sorted chronologically
-    const chronological = [...agentCalls].sort(
-      (a, b) => (a.start_time ?? "").localeCompare(b.start_time ?? "")
-    );
-    const last10 = chronological.slice(-10);
-    const sparklineData = last10.map(
-      (c) => (c.efficiency_score! + c.communication_score! + c.resolution_score!) / 3
-    );
-
     const salesClosed = agentCalls.filter((c) => c.sale_completed).length;
     const upsells = agentCalls.filter((c) => c.upsell_attempted).length;
     const missedUpsells = agentCalls.filter((c) => c.upsell_opportunities && !c.upsell_attempted).length;
     const revenue = agentCalls.reduce((sum, c) => sum + (c.revenue ?? 0), 0);
     const opportunities = agentCalls.filter((c) => c.had_sales_opportunity).length;
     const convRate = opportunities > 0 ? salesClosed / opportunities : 0;
+
+    const withDuration = agentCalls.filter(c => c.duration_seconds != null);
+    const totalDuration = withDuration.reduce((s, c) => s + c.duration_seconds!, 0);
+    const avgDur = withDuration.length > 0 ? Math.round(totalDuration / withDuration.length) : 0;
+
+    const activeDays = new Set(agentCalls.map(c => c.start_time?.slice(0, 10)).filter(Boolean));
+    const salesPerDay = activeDays.size > 0 ? salesClosed / activeDays.size : 0;
+
+    const totalHours = totalDuration / 3600;
+    const revenuePerHour = totalHours > 0 ? revenue / totalHours : 0;
+    const revenuePerCall = agentCalls.length > 0 ? revenue / agentCalls.length : 0;
 
     rows.push({
       name,
@@ -145,8 +177,13 @@ function buildAgentRows(calls: CallRecord[]): AgentRow[] {
       revenue,
       conversionRate: convRate,
       opportunities,
-      sparklineData,
       calls: agentCalls,
+      totalDuration,
+      avgDuration: avgDur,
+      salesPerDay,
+      revenuePerHour,
+      revenuePerCall,
+      lowSample: agentCalls.length < MIN_CALLS_THRESHOLD,
     });
   }
 
@@ -166,27 +203,6 @@ function ScorePill({ value }: { value: number }) {
     >
       {value.toFixed(1)}
     </span>
-  );
-}
-
-function SparkLine({ data }: { data: number[] }) {
-  if (data.length < 2) return <span className="text-muted-foreground/30 text-xs">—</span>;
-  const w = 52;
-  const h = 20;
-  const pad = 2;
-  const min = 0;
-  const max = 5;
-  const points = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
-    const y = h - pad - ((v - min) / (max - min)) * (h - pad * 2);
-    return `${x},${y}`;
-  }).join(" ");
-  const lastVal = data[data.length - 1];
-  const color = lastVal >= 4 ? "oklch(0.59 0.17 148)" : lastVal >= 3 ? "oklch(0.60 0.17 60)" : "oklch(0.56 0.21 20)";
-  return (
-    <svg width={w} height={h} className="inline-block">
-      <polyline fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" points={points} />
-    </svg>
   );
 }
 
@@ -210,6 +226,31 @@ function formatDuration(seconds: number | null): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatDurationHours(seconds: number): string {
+  if (seconds === 0) return "—";
+  const hours = seconds / 3600;
+  if (hours >= 1) return `${hours.toFixed(1)}h`;
+  const m = Math.floor(seconds / 60);
+  return `${m}m`;
+}
+
+function ConversionPill({ rate, opportunities }: { rate: number; opportunities: number }) {
+  if (opportunities === 0) return <span className="text-muted-foreground/30 text-xs">—</span>;
+  const pct = Math.round(rate * 100);
+  const color =
+    pct >= 60 ? "oklch(0.59 0.17 148)" : pct >= 35 ? "oklch(0.60 0.17 60)" : "oklch(0.56 0.21 20)";
+  const bg =
+    pct >= 60 ? "oklch(0.59 0.17 148 / 0.1)" : pct >= 35 ? "oklch(0.60 0.17 60 / 0.1)" : "oklch(0.56 0.21 20 / 0.1)";
+  return (
+    <span
+      className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-md text-[11px] font-mono font-semibold tabular-nums"
+      style={{ color, background: bg }}
+    >
+      {pct}%
+    </span>
+  );
 }
 
 function RubricContent({ rubric }: { rubric: { title: string; anchors: [string, string, string] } }) {
@@ -242,14 +283,6 @@ function ColumnHeader({ label, tooltip }: { label: string; tooltip?: string }) {
     </Tooltip>
   );
 }
-
-// Chart configs
-const scoresChartConfig: ChartConfig = {
-  composite: { label: "Composite", color: "oklch(0.56 0.23 275)" },
-  efficiency: { label: "Efficiency", color: "oklch(0.59 0.17 148)" },
-  communication: { label: "Communication", color: "oklch(0.60 0.17 60)" },
-  resolution: { label: "Resolution", color: "oklch(0.56 0.21 20)" },
-};
 
 const revenueChartConfig: ChartConfig = {
   revenue: { label: "Revenue", color: "oklch(0.56 0.23 275)" },
@@ -298,20 +331,33 @@ function AgentDetail({
     [agent.calls, salesFilter]
   );
 
-  // Chart data: scores over time
-  const scoresData = useMemo(() => {
-    const scored = agent.calls
-      .filter((c) => c.efficiency_score != null && c.communication_score != null && c.resolution_score != null)
-      .sort((a, b) => (a.start_time ?? "").localeCompare(b.start_time ?? ""));
-    return scored.map((c) => ({
-      date: c.start_time
-        ? new Date(c.start_time).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: TZ })
-        : "?",
-      composite: +((c.efficiency_score! + c.communication_score! + c.resolution_score!) / 3).toFixed(2),
-      efficiency: c.efficiency_score!,
-      communication: c.communication_score!,
-      resolution: c.resolution_score!,
-    }));
+  // Daily breakdown: group calls by day
+  const dailyBreakdown = useMemo(() => {
+    const byDay = new Map<string, CallRecord[]>();
+    for (const c of agent.calls) {
+      if (!c.start_time) continue;
+      const day = dateToPacificStr(new Date(c.start_time));
+      const list = byDay.get(day) ?? [];
+      list.push(c);
+      byDay.set(day, list);
+    }
+    // Sort newest first
+    return Array.from(byDay.entries())
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([day, calls]) => {
+        const totalDur = calls.reduce((s, c) => s + (c.duration_seconds ?? 0), 0);
+        const revenue = calls.reduce((s, c) => s + (c.revenue ?? 0), 0);
+        const sales = calls.filter(c => c.sale_completed).length;
+        const hours = totalDur / 3600;
+        const perHour = hours > 0 ? revenue / hours : 0;
+        const d = new Date(day + "T12:00:00");
+        const today = todayPacific();
+        const yesterday = dateToPacificStr(new Date(Date.now() - 86_400_000));
+        const label = day === today ? "Today"
+          : day === yesterday ? "Yesterday"
+          : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        return { day, label, calls: calls.length, sales, revenue, duration: totalDur, perHour };
+      });
   }, [agent.calls]);
 
   // Chart data: revenue per call
@@ -341,6 +387,11 @@ function AgentDetail({
       <div className="flex items-baseline gap-3">
         <h2 className="text-lg font-bold text-foreground">{agent.name}</h2>
         <span className="text-xs font-mono text-muted-foreground/50">{agent.callsHandled} calls</span>
+        {agent.lowSample && (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-muted text-muted-foreground/60 border border-border">
+            Low sample
+          </span>
+        )}
         {needsCoaching(agent) && (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-red-500/10 text-red-500 border border-red-500/20">
             Coach
@@ -348,56 +399,101 @@ function AgentDetail({
         )}
       </div>
 
-      {/* Scores row */}
+      {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <SummaryCard label="Composite Index" value={agent.compositeIndex > 0 ? agent.compositeIndex.toFixed(1) : "—"} sub="out of 5.0" />
         <SummaryCard label="Revenue" value={agent.revenue > 0 ? `$${agent.revenue.toLocaleString("en-US", { minimumFractionDigits: 2 })}` : "—"} sub={`${agent.salesClosed} sales closed`} />
-        <SummaryCard label="Conversion Rate" value={agent.opportunities > 0 ? `${Math.round(agent.conversionRate * 100)}%` : "—"} sub={`${agent.salesClosed}/${agent.opportunities} opportunities`} />
-        <SummaryCard label="Upsells Attempted" value={String(agent.upsellsAttempted)} />
+        <SummaryCard label="$/hr" value={agent.revenuePerHour > 0 ? `$${Math.round(agent.revenuePerHour).toLocaleString()}` : "—"} sub="revenue per hour on calls" />
+        <SummaryCard label="$/call" value={agent.revenuePerCall > 0 ? `$${agent.revenuePerCall.toFixed(2)}` : "—"} sub="avg revenue per call" />
+        <SummaryCard label="Conversion" value={agent.opportunities > 0 ? `${Math.round(agent.conversionRate * 100)}%` : "—"} sub={`${agent.salesClosed}/${agent.opportunities} opportunities`} />
+        <SummaryCard label="Composite Index" value={agent.compositeIndex > 0 ? agent.compositeIndex.toFixed(1) : "—"} sub="Eff / Comm / Res" />
+        <SummaryCard label="Sales / Day" value={agent.salesPerDay > 0 ? agent.salesPerDay.toFixed(1) : "—"} sub="avg per active day" />
+        <SummaryCard label="Total Duration" value={agent.totalDuration > 0 ? formatDurationHours(agent.totalDuration) : "—"} sub={agent.avgDuration > 0 ? `~${formatDuration(agent.avgDuration)} avg/call` : undefined} />
+        <SummaryCard label="Upsells" value={`${agent.upsellsAttempted} attempted`} sub={agent.missedUpsells > 0 ? `${agent.missedUpsells} missed` : undefined} />
       </div>
 
-      {/* Charts: side by side */}
-      {(scoresData.length > 1 || revenueData.length > 0) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {scoresData.length > 1 && (
-            <div className="bg-card rounded-xl card-elevated p-5">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-3">Scores Over Time</p>
-              <ChartContainer config={scoresChartConfig} className="aspect-[2/1] w-full">
-                <LineChart data={scoresData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                  <YAxis domain={[0, 5]} tick={{ fontSize: 10 }} />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  <Line type="monotone" dataKey="composite" stroke="var(--color-composite)" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="efficiency" stroke="var(--color-efficiency)" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
-                  <Line type="monotone" dataKey="communication" stroke="var(--color-communication)" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
-                  <Line type="monotone" dataKey="resolution" stroke="var(--color-resolution)" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
-                </LineChart>
-              </ChartContainer>
+      {/* Daily Breakdown + Revenue chart */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {/* Daily Breakdown */}
+        {dailyBreakdown.length > 0 && (
+          <div className="bg-card rounded-xl card-elevated p-5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-3">Daily Breakdown</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left py-2 pr-3"><span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60">Day</span></th>
+                    <th className="text-right py-2 px-2"><span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60">Calls</span></th>
+                    <th className="text-right py-2 px-2"><span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60">Sales</span></th>
+                    <th className="text-right py-2 px-2"><span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60">Revenue</span></th>
+                    <th className="text-right py-2 px-2"><span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60">Hours</span></th>
+                    <th className="text-right py-2 pl-2"><span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60">$/hr</span></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {dailyBreakdown.map((row) => (
+                    <tr key={row.day}>
+                      <td className="py-2 pr-3">
+                        <span className={cn(
+                          "text-[12px] font-medium",
+                          row.label === "Today" ? "text-primary" : "text-foreground/80"
+                        )}>
+                          {row.label}
+                        </span>
+                      </td>
+                      <td className="text-right py-2 px-2">
+                        <span className="text-[12px] font-mono tabular-nums text-foreground/70">{row.calls}</span>
+                      </td>
+                      <td className="text-right py-2 px-2">
+                        <span className="text-[12px] font-mono tabular-nums text-foreground/70">{row.sales}</span>
+                      </td>
+                      <td className="text-right py-2 px-2">
+                        <span className="text-[12px] font-mono tabular-nums text-foreground/70">
+                          {row.revenue > 0 ? `$${row.revenue.toFixed(2)}` : "—"}
+                        </span>
+                      </td>
+                      <td className="text-right py-2 px-2">
+                        <span className="text-[12px] font-mono tabular-nums text-muted-foreground/60">
+                          {formatDurationHours(row.duration)}
+                        </span>
+                      </td>
+                      <td className="text-right py-2 pl-2">
+                        <span className={cn(
+                          "text-[12px] font-mono tabular-nums font-semibold",
+                          row.perHour >= 200 ? "text-[oklch(0.59_0.17_148)]" : row.perHour > 0 ? "text-foreground/70" : "text-muted-foreground/30"
+                        )}>
+                          {row.perHour > 0 ? `$${Math.round(row.perHour)}` : "—"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )}
-          {revenueData.length > 0 && (
-            <div className="bg-card rounded-xl card-elevated p-5">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-3">Revenue Per Call</p>
-              <ChartContainer config={revenueChartConfig} className="aspect-[2/1] w-full">
-                <BarChart data={revenueData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 10 }} />
-                  <ChartTooltip
-                    content={
-                      <ChartTooltipContent
-                        formatter={(value) => `$${Number(value).toFixed(2)}`}
-                      />
-                    }
-                  />
-                  <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ChartContainer>
-            </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+
+        {/* Revenue Per Call chart */}
+        {revenueData.length > 0 && (
+          <div className="bg-card rounded-xl card-elevated p-5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-3">Revenue Per Call</p>
+            <ChartContainer config={revenueChartConfig} className="aspect-[2/1] w-full">
+              <BarChart data={revenueData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) => `$${Number(value).toFixed(2)}`}
+                    />
+                  }
+                />
+                <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ChartContainer>
+          </div>
+        )}
+      </div>
 
       {/* Filter pills */}
       <div className="flex items-center gap-1.5">
@@ -478,7 +574,6 @@ function AgentDetail({
             const outcome = outcomeLabels[c.outcome ?? ""] ?? null;
             const hasBadges = (c.revenue != null && c.revenue > 0) || c.upsell_attempted || hasMissedUpsell;
 
-            // Left accent: green = sale, amber = opportunity (no sale), purple = upsell attempted, transparent = not a sales call
             const accentColor = (c.revenue != null && c.revenue > 0)
               ? "oklch(0.59 0.17 148)"
               : c.upsell_attempted
@@ -495,10 +590,8 @@ function AgentDetail({
                 onClick={() => setSelectedCall(c)}
                 className="grid grid-cols-[3px_88px_1fr_56px_100px] px-1 cursor-pointer hover:bg-muted/30 transition-colors items-center"
               >
-                {/* Left accent strip */}
                 <div className="self-stretch" style={{ background: accentColor }} />
 
-                {/* Time */}
                 <div className="px-3 py-3.5 flex flex-col gap-0.5">
                   <span className="text-[11px] font-mono text-muted-foreground/70 leading-none">{dateStr}</span>
                   {timeStr && <span className="text-[10px] font-mono text-muted-foreground/40 leading-none">{timeStr}</span>}
@@ -509,7 +602,6 @@ function AgentDetail({
                   )}
                 </div>
 
-                {/* Summary + badges */}
                 <div className="px-4 py-3.5 flex flex-col justify-center min-w-0 gap-1">
                   <p className="text-[12px] text-foreground/80 leading-relaxed line-clamp-2">{c.summary ?? "—"}</p>
                   {hasBadges && (
@@ -536,12 +628,10 @@ function AgentDetail({
                   )}
                 </div>
 
-                {/* Composite score */}
                 <div className="px-3 text-center">
                   <ScorePill value={composite} />
                 </div>
 
-                {/* Outcome + sentiment */}
                 <div className="px-4 py-3.5 flex flex-col items-end justify-center gap-1">
                   {outcome && (
                     <span className="text-[11px] font-semibold" style={{ color: outcome.color }}>
@@ -568,14 +658,19 @@ function AgentDetail({
 }
 
 export function AgentScorecard({ calls, onProcess }: Props) {
-  const [sortKey, setSortKey] = useState<SortKey>("compositeIndex");
+  const [sortKey, setSortKey] = useState<SortKey>("revenue");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<AgentDateRange>("all");
 
-  const agents = useMemo(() => buildAgentRows(calls), [calls]);
+  const filteredCalls = useMemo(() => filterCallsByDate(calls, dateRange), [calls, dateRange]);
+  const agents = useMemo(() => buildAgentRows(filteredCalls), [filteredCalls]);
 
+  // Sort: low-sample agents always go to bottom regardless of sort
   const sorted = useMemo(() => {
     return [...agents].sort((a, b) => {
+      // Low sample agents sink to bottom
+      if (a.lowSample !== b.lowSample) return a.lowSample ? 1 : -1;
       const aVal = a[sortKey];
       const bVal = b[sortKey];
       const cmp = typeof aVal === "string" ? (aVal as string).localeCompare(bVal as string) : (aVal as number) - (bVal as number);
@@ -585,19 +680,21 @@ export function AgentScorecard({ calls, onProcess }: Props) {
 
   const selectedRow = selectedAgent ? agents.find((a) => a.name === selectedAgent) : null;
 
-  // Summary stats
-  const topSeller = useMemo(() => [...agents].sort((a, b) => b.revenue - a.revenue)[0], [agents]);
-  const bestRated = useMemo(() => [...agents].filter((a) => a.compositeIndex > 0).sort((a, b) => b.compositeIndex - a.compositeIndex)[0], [agents]);
-  const mostCalls = useMemo(() => [...agents].sort((a, b) => b.callsHandled - a.callsHandled)[0], [agents]);
+  // Summary stats — only from agents with enough calls
+  const reliableAgents = useMemo(() => agents.filter(a => !a.lowSample), [agents]);
 
-  const totalOpps = agents.reduce((s, a) => s + a.opportunities, 0);
-  const totalSales = agents.reduce((s, a) => s + a.salesClosed, 0);
+  const topSeller = useMemo(() => [...reliableAgents].sort((a, b) => b.revenue - a.revenue)[0], [reliableAgents]);
+  const bestPerHour = useMemo(() => [...reliableAgents].filter(a => a.revenuePerHour > 0).sort((a, b) => b.revenuePerHour - a.revenuePerHour)[0], [reliableAgents]);
+  const mostCalls = useMemo(() => [...reliableAgents].sort((a, b) => b.callsHandled - a.callsHandled)[0], [reliableAgents]);
+
+  const totalOpps = reliableAgents.reduce((s, a) => s + a.opportunities, 0);
+  const totalSales = reliableAgents.reduce((s, a) => s + a.salesClosed, 0);
   const overallConversion = totalOpps > 0 ? Math.round((totalSales / totalOpps) * 100) : 0;
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
       if (sortDir === "desc") setSortDir("asc");
-      else { setSortKey("compositeIndex"); setSortDir("desc"); }
+      else { setSortKey("revenue"); setSortDir("desc"); }
     } else {
       setSortKey(key);
       setSortDir("desc");
@@ -621,18 +718,44 @@ export function AgentScorecard({ calls, onProcess }: Props) {
     { key: "name", label: "Agent" },
     { key: "callsHandled", label: "Calls", align: "right" },
     { key: "compositeIndex", label: "Index", align: "center" },
-    { key: "avgEfficiency", label: "Efficiency", align: "center" },
-    { key: "avgCommunication", label: "Comm", align: "center" },
-    { key: "avgResolution", label: "Resolution", align: "center" },
     { key: "salesClosed", label: "Sales", align: "right" },
     { key: "revenue", label: "Revenue", align: "right" },
-    { key: "missedUpsells", label: "Missed", align: "right" },
-    { key: "conversionRate", label: "Conv %", align: "right" },
+    { key: "revenuePerHour", label: "$/hr", align: "right" },
+    { key: "revenuePerCall", label: "$/call", align: "right" },
+    { key: "conversionRate", label: "Conv %", align: "center" },
+    { key: "totalDuration", label: "Duration", align: "right" },
+    { key: "salesPerDay", label: "Sales/Day", align: "right" },
   ];
 
   return (
     <TooltipProvider>
       <div className="space-y-4">
+
+        {/* Date range filter */}
+        <div className="flex items-center gap-1">
+          {DATE_RANGES.map((d) => {
+            const isActive = dateRange === d.value;
+            return (
+              <button
+                key={d.value}
+                onClick={() => setDateRange(d.value)}
+                className={`h-8 px-3 text-xs rounded-lg border cursor-pointer transition-all ${
+                  isActive
+                    ? "bg-primary/8 border-primary/30 text-primary font-medium"
+                    : "border-border bg-card text-muted-foreground hover:text-foreground hover:border-border/80"
+                }`}
+              >
+                {d.label}
+              </button>
+            );
+          })}
+          {dateRange !== "all" && (
+            <span className="text-[11px] font-mono text-muted-foreground/40 ml-2">
+              {agents.length} agent{agents.length !== 1 ? "s" : ""} · {filteredCalls.filter(c => c.status === "done").length} calls
+            </span>
+          )}
+        </div>
+
         {/* Summary cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <SummaryCard
@@ -641,9 +764,9 @@ export function AgentScorecard({ calls, onProcess }: Props) {
             sub={topSeller?.revenue ? `$${topSeller.revenue.toLocaleString("en-US", { minimumFractionDigits: 2 })}` : undefined}
           />
           <SummaryCard
-            label="Best Rated"
-            value={bestRated?.name.split(" ").slice(0, 2).join(" ") ?? "—"}
-            sub={bestRated ? `${bestRated.compositeIndex.toFixed(1)} / 5.0` : undefined}
+            label="Best $/hr"
+            value={bestPerHour?.name.split(" ").slice(0, 2).join(" ") ?? "—"}
+            sub={bestPerHour ? `$${Math.round(bestPerHour.revenuePerHour).toLocaleString()}/hr` : undefined}
           />
           <SummaryCard
             label="Most Active"
@@ -677,9 +800,6 @@ export function AgentScorecard({ calls, onProcess }: Props) {
                       </button>
                     </th>
                   ))}
-                  <th className="px-3 py-2.5">
-                    <ColumnHeader label="Trend" tooltip={COLUMN_TOOLTIPS["Trend"]} />
-                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -687,7 +807,10 @@ export function AgentScorecard({ calls, onProcess }: Props) {
                   <tr
                     key={agent.name}
                     onClick={() => setSelectedAgent(agent.name)}
-                    className="cursor-pointer hover:bg-muted/30 transition-colors"
+                    className={cn(
+                      "cursor-pointer hover:bg-muted/30 transition-colors",
+                      agent.lowSample && "opacity-50"
+                    )}
                   >
                     <td className="px-3 py-3">
                       <span className="text-[11px] font-mono text-muted-foreground/40">{i + 1}</span>
@@ -697,7 +820,12 @@ export function AgentScorecard({ calls, onProcess }: Props) {
                         <span className="text-[12px] font-medium text-foreground/85">
                           {agent.name.split(" ").slice(0, 2).join(" ")}
                         </span>
-                        {needsCoaching(agent) && (
+                        {agent.lowSample && (
+                          <span className="inline-flex items-center px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider bg-muted text-muted-foreground/50 border border-border leading-none">
+                            Low sample
+                          </span>
+                        )}
+                        {needsCoaching(agent) && !agent.lowSample && (
                           <span className="inline-flex items-center px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider bg-red-500/10 text-red-500 border border-red-500/20 leading-none">
                             Coach
                           </span>
@@ -708,9 +836,6 @@ export function AgentScorecard({ calls, onProcess }: Props) {
                       <span className="text-[12px] font-mono tabular-nums text-foreground/70">{agent.callsHandled}</span>
                     </td>
                     <td className="px-3 py-3 text-center"><ScorePill value={agent.compositeIndex} /></td>
-                    <td className="px-3 py-3 text-center"><ScorePill value={agent.avgEfficiency} /></td>
-                    <td className="px-3 py-3 text-center"><ScorePill value={agent.avgCommunication} /></td>
-                    <td className="px-3 py-3 text-center"><ScorePill value={agent.avgResolution} /></td>
                     <td className="px-3 py-3 text-right">
                       <span className="text-[12px] font-mono tabular-nums text-foreground/70">{agent.salesClosed}</span>
                     </td>
@@ -720,22 +845,34 @@ export function AgentScorecard({ calls, onProcess }: Props) {
                       </span>
                     </td>
                     <td className="px-3 py-3 text-right">
-                      {agent.missedUpsells > 0 ? (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold tabular-nums"
-                          style={{ color: "oklch(0.55 0.17 60)", background: "oklch(0.60 0.17 60 / 0.1)" }}>
-                          {agent.missedUpsells}
-                        </span>
-                      ) : (
-                        <span className="text-[12px] font-mono tabular-nums text-muted-foreground/30">0</span>
-                      )}
+                      <span className="text-[12px] font-mono tabular-nums text-foreground/70">
+                        {agent.revenuePerHour > 0 ? `$${Math.round(agent.revenuePerHour).toLocaleString()}` : "—"}
+                      </span>
                     </td>
                     <td className="px-3 py-3 text-right">
                       <span className="text-[12px] font-mono tabular-nums text-foreground/70">
-                        {agent.opportunities > 0 ? `${Math.round(agent.conversionRate * 100)}%` : "—"}
+                        {agent.revenuePerCall > 0 ? `$${agent.revenuePerCall.toFixed(2)}` : "—"}
                       </span>
                     </td>
-                    <td className="px-3 py-3">
-                      <SparkLine data={agent.sparklineData} />
+                    <td className="px-3 py-3 text-center">
+                      <ConversionPill rate={agent.conversionRate} opportunities={agent.opportunities} />
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      <div className="flex flex-col items-end">
+                        <span className="text-[12px] font-mono tabular-nums text-foreground/70">
+                          {agent.totalDuration > 0 ? formatDurationHours(agent.totalDuration) : "—"}
+                        </span>
+                        {agent.avgDuration > 0 && (
+                          <span className="text-[10px] font-mono tabular-nums text-muted-foreground/40">
+                            ~{formatDuration(agent.avgDuration)}/call
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      <span className="text-[12px] font-mono tabular-nums text-foreground/70">
+                        {agent.salesPerDay > 0 ? agent.salesPerDay.toFixed(1) : "—"}
+                      </span>
                     </td>
                   </tr>
                 ))}

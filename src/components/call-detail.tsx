@@ -141,7 +141,7 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
               <p className="text-[13px] text-muted-foreground/60 font-mono">{time}</p>
             </div>
 
-            {!isDone && !isProcessing && onProcess && (
+            {!isDone && !isProcessing && call.status !== "permanently_failed" && onProcess && (
               <button
                 onClick={() => { onProcess(call.recording_id); onClose(); }}
                 className="shrink-0 h-9 px-4 text-sm font-semibold rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
@@ -167,7 +167,7 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
                     style={
                       isProcessing
                         ? { borderColor: "oklch(0.56 0.23 275 / 0.3)", background: "oklch(0.56 0.23 275 / 0.06)" }
-                        : call.status === "failed"
+                        : call.status === "failed" || call.status === "permanently_failed"
                         ? { borderColor: "oklch(0.56 0.21 20 / 0.3)", background: "oklch(0.56 0.21 20 / 0.06)" }
                         : { borderColor: "oklch(0.90 0.006 258)", background: "transparent" }
                     }
@@ -183,10 +183,15 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
                         </div>
                         <p className="text-[11px] text-muted-foreground/60">Transcribing and analyzing...</p>
                       </>
+                    ) : call.status === "permanently_failed" ? (
+                      <>
+                        <p className="text-xs font-semibold text-destructive">Permanently Failed</p>
+                        <p className="text-[11px] text-muted-foreground/60">Failed after {call.retry_count} attempts. Will not be retried automatically.</p>
+                      </>
                     ) : call.status === "failed" ? (
                       <>
                         <p className="text-xs font-semibold text-destructive">Failed</p>
-                        <p className="text-[11px] text-muted-foreground/60">Processing encountered an error.</p>
+                        <p className="text-[11px] text-muted-foreground/60">Processing encountered an error. Will retry automatically.</p>
                       </>
                     ) : (
                       <>

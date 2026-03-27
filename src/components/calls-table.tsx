@@ -52,8 +52,8 @@ function formatDate(t: string | null) {
   };
 }
 
-// Grid template: accent | time | summary | agent/customer | store | category | outcome
-const GRID = "grid-cols-[3px_88px_1fr_150px_110px_120px_110px]";
+// Grid template: accent | time | duration | summary | agent/customer | store | category | outcome
+const GRID = "grid-cols-[3px_88px_64px_1fr_150px_110px_120px_110px]";
 
 function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey | null; sortDir: SortDir }) {
   if (sortKey !== col) return <ChevronsUpDown className="w-3 h-3 opacity-30" />;
@@ -151,6 +151,9 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
             <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60 group-hover:text-muted-foreground/80">Time</span>
             <SortIcon col="time" sortKey={sortKey} sortDir={sortDir} />
           </button>
+          <div className="px-2 py-2.5">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60">Dur.</span>
+          </div>
           <div className="px-4 py-2.5">
             <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/60">Summary</span>
           </div>
@@ -223,11 +226,6 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
                     {top}
                   </span>
                   <span className="text-[10px] font-mono text-muted-foreground/45 leading-none">{bottom}</span>
-                  {isDone && call.duration_seconds != null && (
-                    <span className="text-[9px] font-mono text-muted-foreground/30 leading-none">
-                      {Math.floor(call.duration_seconds / 60)}:{(call.duration_seconds % 60).toString().padStart(2, "0")}
-                    </span>
-                  )}
                   {isProcessing && (
                     <span className="flex items-center gap-1 mt-1.5">
                       <span className="relative flex h-1.5 w-1.5">
@@ -238,6 +236,17 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
                         Processing
                       </span>
                     </span>
+                  )}
+                </div>
+
+                {/* Duration */}
+                <div className="px-2 py-4 flex items-center justify-center">
+                  {call.duration_seconds != null ? (
+                    <span className="text-[13px] font-mono font-semibold tabular-nums text-foreground/70">
+                      {Math.floor(call.duration_seconds / 60)}:{(call.duration_seconds % 60).toString().padStart(2, "0")}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground/25 text-xs">—</span>
                   )}
                 </div>
 
@@ -276,6 +285,10 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
                       <div className="h-3 shimmer rounded-md w-4/5" />
                       <div className="h-3 shimmer rounded-md w-3/5" />
                     </div>
+                  ) : call.status === "permanently_failed" ? (
+                    <span className="text-xs text-destructive/70 font-medium">
+                      Permanently failed ({call.retry_count} attempts)
+                    </span>
                   ) : call.status === "failed" ? (
                     <span className="text-xs text-destructive/70 font-medium">
                       Processing failed — click to retry

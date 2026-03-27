@@ -8,6 +8,11 @@ import { StatsRow } from "@/components/stats-row";
 import { Filters, applyFilters, type FilterState } from "@/components/filters";
 import { CallsTable } from "@/components/calls-table";
 import { AgentScorecard } from "@/components/agent-scorecard";
+import { AnalyticsView } from "@/components/analytics-view";
+import { DATA_QUALITY_CUTOFF } from "@/lib/constants";
+
+// Pre-parsed once — avoids re-parsing the offset string on every render/filter
+const CUTOFF_MS = new Date(DATA_QUALITY_CUTOFF).getTime();
 
 const DEFAULT_FILTERS: FilterState = {
   search: "",
@@ -17,6 +22,7 @@ const DEFAULT_FILTERS: FilterState = {
   sentiment: "__all__",
   outcome: "__all__",
   salesActivity: "__all__",
+  orderType: "__all__",
   dateRange: "all",
   timeSort: "desc",
 };
@@ -26,13 +32,22 @@ export default function Dashboard() {
   const { processing, events: processEvents, progress, startProcess } = useProcess();
   const { calls, loading, refetch } = useCalls();
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
-  const [view, setView] = useState<"calls" | "agents">("calls");
+  const [view, setView] = useState<"calls" | "agents" | "analytics">("calls");
   const hasAutoSynced = useRef(false);
   const autoDispatchedIds = useRef<Set<number>>(new Set());
 
   // All actionable calls — used for the manual Analyze button (includes failed so user can retry)
   // Filter out skipped calls from all UI components
   const activeCalls = useMemo(() => calls.filter(c => c.status !== "skipped"), [calls]);
+
+  // Filter out old data with missing fields — only use calls on or after DATA_QUALITY_CUTOFF.
+  // Uses Date comparison (not string compare) because start_time is UTC ("...Z") while
+  // DATA_QUALITY_CUTOFF uses a Pacific offset ("-07:00"). String compare would incorrectly
+  // include Wednesday evening calls (e.g. "2026-03-19T01:00:00Z" > "2026-03-19T00:00:00-07:00").
+  const qualityCalls = useMemo(
+    () => activeCalls.filter(c => c.start_time && new Date(c.start_time).getTime() >= CUTOFF_MS),
+    [activeCalls]
+  );
 
   const pendingIds = useMemo(
     () =>
@@ -118,7 +133,7 @@ export default function Dashboard() {
   );
 
   const pendingCount = pendingIds.length;
-  const filtered = applyFilters(activeCalls, filters);
+  const filtered = applyFilters(qualityCalls, filters);
   const hasActiveFilters =
     filters.search !== "" ||
     filters.store !== "__all__" ||
@@ -127,6 +142,7 @@ export default function Dashboard() {
     filters.sentiment !== "__all__" ||
     filters.outcome !== "__all__" ||
     filters.salesActivity !== "__all__" ||
+    filters.orderType !== "__all__" ||
     filters.dateRange !== "all";
 
   return (
@@ -195,7 +211,7 @@ export default function Dashboard() {
         {/* View toggle */}
         <BlurFade delay={0.10} duration={0.45}>
           <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/60 w-fit">
-            {(["calls", "agents"] as const).map((v) => (
+            {(["calls", "agents", "analytics"] as const).map((v) => (
               <button
                 key={v}
                 onClick={() => setView(v)}
@@ -205,7 +221,7 @@ export default function Dashboard() {
                     : "text-muted-foreground/60 hover:text-muted-foreground"
                 }`}
               >
-                {v === "calls" ? "Calls" : "Agents"}
+                {v === "calls" ? "Calls" : v === "agents" ? "Agents" : "Analytics"}
               </button>
             ))}
           </div>
@@ -214,19 +230,19 @@ export default function Dashboard() {
         {view === "calls" ? (
           <>
             <BlurFade delay={0.12} duration={0.45}>
-              <StatsRow calls={activeCalls} />
+              <StatsRow calls={filtered} />
             </BlurFade>
 
             <BlurFade delay={0.17} duration={0.45}>
               <div className="space-y-2.5">
-                <Filters calls={activeCalls} filters={filters} onChange={setFilters} />
+                <Filters calls={qualityCalls} filters={filters} onChange={setFilters} />
                 <div className="flex items-center gap-2 pl-0.5">
                   <p className="text-xs font-mono text-muted-foreground/50 tabular-nums">
-                    {filtered.length === activeCalls.length
-                      ? `${activeCalls.length.toLocaleString()} calls`
-                      : `${filtered.length.toLocaleString()} of ${activeCalls.length.toLocaleString()}`}
+                    {filtered.length === qualityCalls.length
+                      ? `${qualityCalls.length.toLocaleString()} calls`
+                      : `${filtered.length.toLocaleString()} of ${qualityCalls.length.toLocaleString()}`}
                   </p>
-                  {filtered.length !== activeCalls.length && (
+                  {filtered.length !== qualityCalls.length && (
                     <span className="text-xs font-mono text-muted-foreground/35">· filtered</span>
                   )}
                 </div>
@@ -237,9 +253,13 @@ export default function Dashboard() {
               <CallsTable calls={filtered} onProcess={handleProcessOne} isFiltered={hasActiveFilters} timeSort={filters.timeSort} />
             </BlurFade>
           </>
+        ) : view === "agents" ? (
+          <BlurFade delay={0.12} duration={0.45}>
+            <AgentScorecard calls={qualityCalls} onProcess={handleProcessOne} />
+          </BlurFade>
         ) : (
           <BlurFade delay={0.12} duration={0.45}>
-            <AgentScorecard calls={activeCalls} onProcess={handleProcessOne} />
+            <AnalyticsView calls={qualityCalls} />
           </BlurFade>
         )}
 

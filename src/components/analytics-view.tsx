@@ -1,0 +1,482 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import {
+  BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Cell, LabelList,
+} from "recharts";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
+import { type CallRecord } from "@/lib/supabase";
+import {
+  groupByPeriod,
+  getHourPacific,
+  getDayOfWeekPacific,
+  computeAvgDuration,
+  formatDur,
+} from "@/lib/analytics-utils";
+import { TZ } from "@/lib/timezone";
+import { dateToPacificStr } from "@/lib/timezone";
+
+type AnalyticsDateRange = "all" | "yesterday" | "3d" | "5d";
+type Props = { calls: CallRecord[] };
+
+const BRAND = "oklch(0.56 0.23 275)";
+const GREEN = "oklch(0.59 0.17 148)";
+const AMBER = "oklch(0.60 0.17 60)";
+const RED   = "oklch(0.56 0.21 20)";
+const SLATE = "oklch(0.55 0.04 258)";
+
+const DAYS_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+const DATE_RANGES: { value: AnalyticsDateRange; label: string }[] = [
+  { value: "all",       label: "All time"  },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "3d",        label: "3 days"    },
+  { value: "5d",        label: "5 days"    },
+];
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-3">
+      {children}
+    </h3>
+  );
+}
+
+function ChartCard({
+  title,
+  subtitle,
+  children,
+  className = "",
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`bg-card rounded-xl card-elevated p-5 ${className}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-0.5">
+        {title}
+      </p>
+      {subtitle && (
+        <p className="text-[9px] text-muted-foreground/35 mb-3">{subtitle}</p>
+      )}
+      {!subtitle && <div className="mb-3" />}
+      {children}
+    </div>
+  );
+}
+
+export function AnalyticsView({ calls }: Props) {
+  const [dateRange, setDateRange] = useState<AnalyticsDateRange>("all");
+
+  // ── Date range filter — affects time-series and breakdown charts only ─────
+  const rangedCalls = useMemo(() => {
+    if (dateRange === "all") return calls;
+    if (dateRange === "yesterday") {
+      const yesterday = dateToPacificStr(new Date(Date.now() - 86_400_000));
+      return calls.filter(c => c.start_time && dateToPacificStr(new Date(c.start_time)) === yesterday);
+    }
+    const days = dateRange === "3d" ? 3 : 5;
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+    return calls.filter(c => c.start_time && c.start_time >= cutoff);
+  }, [calls, dateRange]);
+
+  // Processed calls within range — for AI-derived metrics
+  const doneCalls = useMemo(() => rangedCalls.filter(c => c.status === "done"), [rangedCalls]);
+
+  // ── PATTERN CHARTS — always use ALL quality calls, ignore date range ───────
+  // Patterns only make sense with as much data as possible (peak hour, busiest weekday, etc.)
+  const peakHours = useMemo(() => {
+    const counts = new Array(24).fill(0);
+    for (const c of calls) {
+      const h = getHourPacific(c);
+      if (h != null) counts[h]++;
+    }
+    return counts
+      .map((count, hour) => ({ hour: `${hour.toString().padStart(2, "0")}:00`, calls: count }))
+      .filter((_, i) => i >= 7 && i <= 22);
+  }, [calls]);
+
+  const dayOfWeek = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const d of DAYS_ORDER) counts[d] = 0;
+    for (const c of calls) {
+      const d = getDayOfWeekPacific(c);
+      if (d && d in counts) counts[d]++;
+    }
+    return DAYS_ORDER.map(d => ({ day: d, calls: counts[d] }));
+  }, [calls]);
+
+  // ── TIME-SERIES — respect date range, always daily granularity ────────────
+  // Volume: group by Pacific date, label as "Thu 19" for readability
+  const volumeByDay = useMemo(() => {
+    const countMap  = new Map<string, number>(); // dateKey "2026-03-19" → count
+    const labelMap  = new Map<string, string>(); // dateKey → "Thu 19"
+    for (const c of rangedCalls) {
+      if (!c.start_time) continue;
+      const d = new Date(c.start_time);
+      const dateKey = d.toLocaleDateString("en-CA", { timeZone: TZ }); // "YYYY-MM-DD" for sorting
+      const dayName = d.toLocaleDateString("en-US", { weekday: "short", timeZone: TZ });
+      const dayNum  = d.toLocaleDateString("en-US", { day: "numeric", timeZone: TZ });
+      labelMap.set(dateKey, `${dayName} ${dayNum}`);
+      countMap.set(dateKey, (countMap.get(dateKey) ?? 0) + 1);
+    }
+    return Array.from(countMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, calls]) => ({ label: labelMap.get(k)!, calls }));
+  }, [rangedCalls]);
+
+  const revenueOverTime = useMemo(() => {
+    const grouped = groupByPeriod(doneCalls, "daily");
+    return Array.from(grouped.entries()).map(([label, cs]) => ({
+      label,
+      revenue: cs.reduce((s, c) => s + (c.revenue ?? 0), 0),
+    }));
+  }, [doneCalls]);
+
+  const conversionOverTime = useMemo(() => {
+    const grouped = groupByPeriod(doneCalls, "daily");
+    return Array.from(grouped.entries()).map(([label, cs]) => {
+      const opps  = cs.filter(c => c.had_sales_opportunity).length;
+      const sales = cs.filter(c => c.sale_completed).length;
+      return { label, rate: opps > 0 ? Math.round((sales / opps) * 100) : 0 };
+    });
+  }, [doneCalls]);
+
+  // ── Category & Order Type ─────────────────────────────────────────────────
+  const categoryBreakdown = useMemo(() => {
+    const map = new Map<string, { count: number; revenue: number }>();
+    for (const c of doneCalls) {
+      const cat = c.category ?? "Unknown";
+      const entry = map.get(cat) ?? { count: 0, revenue: 0 };
+      entry.count++;
+      entry.revenue += c.revenue ?? 0;
+      map.set(cat, entry);
+    }
+    return Array.from(map.entries())
+      .map(([name, data]) => ({ name: name.replace(/_/g, " "), ...data }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  }, [doneCalls]);
+
+  const orderTypeData = useMemo(() => {
+    const pickup   = doneCalls.filter(c => c.category === "order pickup");
+    const delivery = doneCalls.filter(c => c.category === "order delivery");
+    return [
+      { type: "Pickup",   count: pickup.length,   revenue: pickup.reduce((s, c)   => s + (c.revenue ?? 0), 0) },
+      { type: "Delivery", count: delivery.length,  revenue: delivery.reduce((s, c) => s + (c.revenue ?? 0), 0) },
+    ];
+  }, [doneCalls]);
+
+  // ── Duration Analytics ────────────────────────────────────────────────────
+  const durationByAgent = useMemo(() => {
+    const map = new Map<string, CallRecord[]>();
+    for (const c of rangedCalls) {
+      if (!c.agent_name || c.duration_seconds == null) continue;
+      const list = map.get(c.agent_name) ?? [];
+      list.push(c);
+      map.set(c.agent_name, list);
+    }
+    return Array.from(map.entries())
+      .map(([agent, cs]) => ({ name: agent.split(" ").slice(0, 2).join(" "), avg: computeAvgDuration(cs) }))
+      .sort((a, b) => b.avg - a.avg)
+      .slice(0, 10);
+  }, [rangedCalls]);
+
+  const durationByCategory = useMemo(() => {
+    const map = new Map<string, CallRecord[]>();
+    for (const c of doneCalls) {
+      if (!c.category || c.duration_seconds == null) continue;
+      const list = map.get(c.category) ?? [];
+      list.push(c);
+      map.set(c.category, list);
+    }
+    return Array.from(map.entries())
+      .map(([cat, cs]) => ({ name: cat.replace(/_/g, " "), avg: computeAvgDuration(cs) }))
+      .sort((a, b) => b.avg - a.avg)
+      .slice(0, 10);
+  }, [doneCalls]);
+
+  // ── Agent Comparison ──────────────────────────────────────────────────────
+  type AgentMetric = "score" | "revenue" | "calls" | "conversion";
+  const [agentMetric, setAgentMetric] = useState<AgentMetric>("revenue");
+
+  const agentComparison = useMemo(() => {
+    const map = new Map<string, CallRecord[]>();
+    for (const c of doneCalls) {
+      if (!c.agent_name) continue;
+      const list = map.get(c.agent_name) ?? [];
+      list.push(c);
+      map.set(c.agent_name, list);
+    }
+    return Array.from(map.entries())
+      .map(([name, agentCalls]) => {
+        const scored = agentCalls.filter(c => c.efficiency_score != null && c.communication_score != null && c.resolution_score != null);
+        const avgScore = scored.length > 0
+          ? scored.reduce((s, c) => s + (c.efficiency_score! + c.communication_score! + c.resolution_score!) / 3, 0) / scored.length
+          : 0;
+        const revenue    = agentCalls.reduce((s, c) => s + (c.revenue ?? 0), 0);
+        const opps       = agentCalls.filter(c => c.had_sales_opportunity).length;
+        const sales      = agentCalls.filter(c => c.sale_completed).length;
+        const conversion = opps > 0 ? Math.round((sales / opps) * 100) : 0;
+        return { name: name.split(" ").slice(0, 2).join(" "), score: +avgScore.toFixed(2), revenue, calls: agentCalls.length, conversion };
+      })
+      .sort((a, b) => b[agentMetric] - a[agentMetric]);
+  }, [doneCalls, agentMetric]);
+
+  // Chart configs
+  const volumeConfig: ChartConfig     = { calls:      { label: "Calls",         color: BRAND } };
+  const revenueConfig: ChartConfig    = { revenue:    { label: "Revenue",        color: GREEN } };
+  const conversionConfig: ChartConfig = { rate:       { label: "Conversion %",   color: BRAND } };
+  const catConfig: ChartConfig        = { count:      { label: "Calls",          color: BRAND } };
+  const orderConfig: ChartConfig      = { count:      { label: "Count",          color: BRAND }, revenue: { label: "Revenue", color: GREEN } };
+  const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   color: BRAND } };
+  const agentConfig: ChartConfig      = {
+    score:      { label: "Score",        color: BRAND },
+    revenue:    { label: "Revenue",      color: GREEN },
+    calls:      { label: "Calls",        color: AMBER },
+    conversion: { label: "Conversion %", color: RED   },
+  };
+
+  if (calls.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-32 gap-4 text-center bg-card rounded-xl card-elevated">
+        <p className="text-sm font-semibold text-muted-foreground">No analytics data</p>
+        <p className="text-xs font-mono text-muted-foreground/50">Processed calls will appear here</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+
+      {/* Controls — date range only (no period selector, always daily) */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-1">
+          {DATE_RANGES.map((r) => (
+            <button
+              key={r.value}
+              onClick={() => setDateRange(r.value)}
+              className={`h-8 px-3 text-xs rounded-lg border cursor-pointer transition-all ${
+                dateRange === r.value
+                  ? "bg-primary/8 border-primary/30 text-primary font-medium"
+                  : "border-border bg-card text-muted-foreground hover:text-foreground hover:border-border/80"
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] font-mono text-muted-foreground/40 tabular-nums">
+          {rangedCalls.length.toLocaleString()} calls
+        </span>
+      </div>
+
+      {/* ── 1. Volume & Timing ─────────────────────────────── */}
+      <section>
+        <SectionTitle>Volume & Timing</SectionTitle>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+
+          {/* Calls by Day — chronological, affected by date range */}
+          <ChartCard title="Calls by Day">
+            <ChartContainer config={volumeConfig} className="h-[180px] w-full aspect-auto">
+              <BarChart data={volumeByDay} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis hide allowDecimals={false} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Bar dataKey="calls" fill={BRAND} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ChartContainer>
+          </ChartCard>
+
+          {/* Peak Hours — PATTERN, always all data */}
+          <ChartCard title="Peak Hours (Pacific)" subtitle="Pattern · all available data">
+            <ChartContainer config={volumeConfig} className="h-[180px] w-full aspect-auto">
+              <BarChart data={peakHours} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis dataKey="hour" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} interval={1} />
+                <YAxis hide allowDecimals={false} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Bar dataKey="calls" fill={BRAND} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ChartContainer>
+          </ChartCard>
+
+          {/* Day of Week — PATTERN, always all data */}
+          <ChartCard title="Day of Week" subtitle="Pattern · all available data">
+            <ChartContainer config={volumeConfig} className="h-[180px] w-full aspect-auto">
+              <BarChart data={dayOfWeek} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis dataKey="day" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis hide allowDecimals={false} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Bar dataKey="calls" radius={[3, 3, 0, 0]}>
+                  {dayOfWeek.map((entry) => (
+                    <Cell key={entry.day} fill={entry.day === "Sat" || entry.day === "Sun" ? SLATE : BRAND} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ChartContainer>
+          </ChartCard>
+
+        </div>
+      </section>
+
+      {/* ── 2. Category & Order Type ───────────────────────── */}
+      <section>
+        <SectionTitle>Category & Order Type</SectionTitle>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+
+          <ChartCard title="Category Breakdown">
+            <ChartContainer config={catConfig} className="h-[240px] w-full aspect-auto">
+              <BarChart data={categoryBreakdown} layout="vertical" margin={{ top: 0, right: 36, bottom: 0, left: 0 }}>
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis type="number" hide />
+                <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={100} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Bar dataKey="count" fill={BRAND} radius={[0, 3, 3, 0]} barSize={14}>
+                  <LabelList dataKey="count" position="right" style={{ fontSize: 10, fill: "oklch(0.55 0.04 258)" }} />
+                </Bar>
+              </BarChart>
+            </ChartContainer>
+          </ChartCard>
+
+          <ChartCard title="Delivery vs Pickup">
+            <ChartContainer config={orderConfig} className="h-[240px] w-full aspect-auto">
+              <BarChart data={orderTypeData} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis dataKey="type" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="left"  hide />
+                <YAxis yAxisId="right" orientation="right" hide />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value, name) => name === "revenue" ? `$${Number(value).toFixed(2)}` : String(value)}
+                    />
+                  }
+                />
+                <Bar yAxisId="left"  dataKey="count"   fill={BRAND} radius={[3, 3, 0, 0]} barSize={32} />
+                <Bar yAxisId="right" dataKey="revenue"  fill={GREEN} radius={[3, 3, 0, 0]} barSize={32} />
+              </BarChart>
+            </ChartContainer>
+          </ChartCard>
+
+        </div>
+      </section>
+
+      {/* ── 3. Sales Performance ────────────────────────────── */}
+      <section>
+        <SectionTitle>Sales Performance</SectionTitle>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+
+          <ChartCard title="Revenue by Day">
+            <ChartContainer config={revenueConfig} className="h-[200px] w-full aspect-auto">
+              <LineChart data={revenueOverTime} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis dataKey="label" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
+                <ChartTooltip content={<ChartTooltipContent formatter={(value) => `$${Number(value).toFixed(2)}`} />} />
+                <Line type="monotone" dataKey="revenue" stroke={GREEN} strokeWidth={2} dot={{ fill: GREEN, r: 3 }} />
+              </LineChart>
+            </ChartContainer>
+          </ChartCard>
+
+          <ChartCard title="Conversion Rate by Day">
+            <ChartContainer config={conversionConfig} className="h-[200px] w-full aspect-auto">
+              <LineChart data={conversionOverTime} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis dataKey="label" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 9 }} axisLine={false} tickLine={false} domain={[0, 100]} />
+                <ChartTooltip content={<ChartTooltipContent formatter={(value) => `${value}%`} />} />
+                <Line type="monotone" dataKey="rate" stroke={BRAND} strokeWidth={2} dot={{ fill: BRAND, r: 3 }} />
+              </LineChart>
+            </ChartContainer>
+          </ChartCard>
+
+        </div>
+      </section>
+
+      {/* ── 4. Duration Analytics ──────────────────────────── */}
+      <section>
+        <SectionTitle>Duration Analytics</SectionTitle>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+
+          <ChartCard title="Avg Duration by Agent">
+            <ChartContainer config={durConfig} className="h-[220px] w-full aspect-auto">
+              <BarChart data={durationByAgent} layout="vertical" margin={{ top: 0, right: 30, bottom: 0, left: 0 }}>
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis type="number" hide />
+                <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={90} />
+                <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatDur(Number(value))} />} />
+                <Bar dataKey="avg" fill={BRAND} radius={[0, 3, 3, 0]} barSize={14} />
+              </BarChart>
+            </ChartContainer>
+          </ChartCard>
+
+          <ChartCard title="Avg Duration by Category">
+            <ChartContainer config={durConfig} className="h-[220px] w-full aspect-auto">
+              <BarChart data={durationByCategory} layout="vertical" margin={{ top: 0, right: 30, bottom: 0, left: 0 }}>
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis type="number" hide />
+                <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={100} />
+                <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatDur(Number(value))} />} />
+                <Bar dataKey="avg" fill={AMBER} radius={[0, 3, 3, 0]} barSize={14} />
+              </BarChart>
+            </ChartContainer>
+          </ChartCard>
+
+        </div>
+      </section>
+
+      {/* ── 5. Agent Comparison ─────────────────────────────── */}
+      <section>
+        <SectionTitle>Agent Comparison</SectionTitle>
+        <div className="bg-card rounded-xl card-elevated p-5">
+          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/60 w-fit mb-4">
+            {(["revenue", "calls", "score", "conversion"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setAgentMetric(m)}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  agentMetric === m
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground/60 hover:text-muted-foreground"
+                }`}
+              >
+                {m === "score" ? "Score" : m === "revenue" ? "Revenue" : m === "calls" ? "Calls" : "Conversion"}
+              </button>
+            ))}
+          </div>
+          <ChartContainer config={agentConfig} className="h-[260px] w-full aspect-auto">
+            <BarChart data={agentComparison} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
+              <XAxis dataKey="name" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    formatter={(value, name) =>
+                      name === "revenue"     ? `$${Number(value).toFixed(2)}`
+                      : name === "conversion" ? `${value}%`
+                      : String(value)
+                    }
+                  />
+                }
+              />
+              <Bar dataKey={agentMetric} fill={`var(--color-${agentMetric})`} radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
+        </div>
+      </section>
+
+    </div>
+  );
+}

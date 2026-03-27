@@ -5,6 +5,8 @@ import { getSupabaseServer } from "@/lib/supabase";
 
 export const maxDuration = 300;
 
+const MAX_RETRIES = 2;
+
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   const { recordingId } = (await req.json().catch(() => ({}))) as {
@@ -30,7 +32,7 @@ export async function POST(req: NextRequest) {
         console.log(`[process] Starting recording ${recordingId}`);
         const { data: recording, error: fetchError } = await supabase
           .from("calls")
-          .select("recording_id, start_time, caller_phone, callee_phone, agent_name, duration_seconds")
+          .select("recording_id, start_time, caller_phone, callee_phone, agent_name, duration_seconds, retry_count")
           .eq("recording_id", recordingId)
           .single();
 
@@ -195,9 +197,23 @@ export async function POST(req: NextRequest) {
         });
       } catch (err) {
         console.error(`[process] FATAL for ${recordingId}:`, err instanceof Error ? err.message : String(err));
+
+        // Fetch current retry count, increment, and mark permanently_failed if max exceeded
+        const { data: current } = await supabase
+          .from("calls")
+          .select("retry_count")
+          .eq("recording_id", recordingId)
+          .single();
+        const nextRetry = ((current?.retry_count as number) ?? 0) + 1;
+        const newStatus = nextRetry >= MAX_RETRIES ? "permanently_failed" : "failed";
+
+        if (newStatus === "permanently_failed") {
+          console.log(`[process] Recording ${recordingId} permanently failed after ${nextRetry} attempts`);
+        }
+
         await supabase
           .from("calls")
-          .update({ status: "failed" })
+          .update({ status: newStatus, retry_count: nextRetry })
           .eq("recording_id", recordingId)
           .then(() => {}, () => {});
 
