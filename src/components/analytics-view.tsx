@@ -48,6 +48,15 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+function StatLine({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-[10px] text-muted-foreground/50">{label}</span>
+      <span className={`text-[13px] font-mono font-semibold tabular-nums ${accent ? "text-foreground" : "text-foreground/75"}`}>{value}</span>
+    </div>
+  );
+}
+
 function ChartCard({
   title,
   subtitle,
@@ -167,8 +176,8 @@ export function AnalyticsView({ calls }: Props) {
   }, [doneCalls]);
 
   const orderTypeData = useMemo(() => {
-    const pickup   = doneCalls.filter(c => c.category === "order pickup");
-    const delivery = doneCalls.filter(c => c.category === "order delivery");
+    const pickup   = doneCalls.filter(c => c.category === "order_pickup");
+    const delivery = doneCalls.filter(c => c.category === "order_delivery" || c.category === "express_delivery");
     return [
       { type: "Pickup",   count: pickup.length,   revenue: pickup.reduce((s, c)   => s + (c.revenue ?? 0), 0) },
       { type: "Delivery", count: delivery.length,  revenue: delivery.reduce((s, c) => s + (c.revenue ?? 0), 0) },
@@ -199,9 +208,31 @@ export function AnalyticsView({ calls }: Props) {
       map.set(c.category, list);
     }
     return Array.from(map.entries())
-      .map(([cat, cs]) => ({ name: cat.replace(/_/g, " "), avg: computeAvgDuration(cs) }))
+      .filter(([, cs]) => cs.length >= 5) // min 5 calls — single-call averages are meaningless
+      .map(([cat, cs]) => ({ name: cat.replace(/_/g, " "), avg: computeAvgDuration(cs), count: cs.length }))
       .sort((a, b) => b.avg - a.avg)
       .slice(0, 10);
+  }, [doneCalls]);
+
+  // ── Missed Opportunities ─────────────────────────────────────────────────
+  const missedByAgent = useMemo(() => {
+    const map = new Map<string, { opps: number; sales: number }>();
+    for (const c of doneCalls) {
+      if (!c.agent_name || !c.had_sales_opportunity) continue;
+      const entry = map.get(c.agent_name) ?? { opps: 0, sales: 0 };
+      entry.opps++;
+      if (c.sale_completed) entry.sales++;
+      map.set(c.agent_name, entry);
+    }
+    return Array.from(map.entries())
+      .map(([name, d]) => ({
+        name: name.split(" ").slice(0, 2).join(" "),
+        converted: d.sales,
+        missed: d.opps - d.sales,
+        total: d.opps,
+        rate: Math.round((d.sales / d.opps) * 100),
+      }))
+      .sort((a, b) => b.total - a.total);
   }, [doneCalls]);
 
   // ── Agent Comparison ──────────────────────────────────────────────────────
@@ -231,13 +262,24 @@ export function AnalyticsView({ calls }: Props) {
       .sort((a, b) => b[agentMetric] - a[agentMetric]);
   }, [doneCalls, agentMetric]);
 
+  // ── KPI Summary ───────────────────────────────────────────────────────────
+  const kpis = useMemo(() => {
+    const totalCalls   = rangedCalls.length;
+    const totalRevenue = doneCalls.reduce((s, c) => s + (c.revenue ?? 0), 0);
+    const opps         = doneCalls.filter(c => c.had_sales_opportunity).length;
+    const sales        = doneCalls.filter(c => c.sale_completed).length;
+    const conversion   = opps > 0 ? Math.round((sales / opps) * 100) : null;
+    const avgDur       = computeAvgDuration(rangedCalls.filter(c => c.duration_seconds != null));
+    return { totalCalls, totalRevenue, conversion, avgDur, opps };
+  }, [rangedCalls, doneCalls]);
+
   // Chart configs
   const volumeConfig: ChartConfig     = { calls:      { label: "Calls",         color: BRAND } };
   const revenueConfig: ChartConfig    = { revenue:    { label: "Revenue",        color: GREEN } };
   const conversionConfig: ChartConfig = { rate:       { label: "Conversion %",   color: BRAND } };
   const catConfig: ChartConfig        = { count:      { label: "Calls",          color: BRAND } };
-  const orderConfig: ChartConfig      = { count:      { label: "Count",          color: BRAND }, revenue: { label: "Revenue", color: GREEN } };
-  const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   color: BRAND } };
+const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   color: BRAND } };
+  const missedConfig: ChartConfig     = { converted: { label: "Converted", color: GREEN }, missed: { label: "Missed", color: RED } };
   const agentConfig: ChartConfig      = {
     score:      { label: "Score",        color: BRAND },
     revenue:    { label: "Revenue",      color: GREEN },
@@ -277,6 +319,42 @@ export function AnalyticsView({ calls }: Props) {
         <span className="text-[11px] font-mono text-muted-foreground/40 tabular-nums">
           {rangedCalls.length.toLocaleString()} calls
         </span>
+      </div>
+
+      {/* ── KPI Summary Row ────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          {
+            label: "Total Calls",
+            value: kpis.totalCalls.toLocaleString(),
+            sub: null,
+            color: BRAND,
+          },
+          {
+            label: "Total Revenue",
+            value: `$${kpis.totalRevenue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            sub: doneCalls.length > 0 ? `$${(kpis.totalRevenue / doneCalls.length).toFixed(2)}/call` : null,
+            color: GREEN,
+          },
+          {
+            label: "Conversion Rate",
+            value: kpis.conversion != null ? `${kpis.conversion}%` : "—",
+            sub: kpis.opps > 0 ? `${kpis.opps} opportunities` : null,
+            color: AMBER,
+          },
+          {
+            label: "Avg Duration",
+            value: kpis.avgDur > 0 ? formatDur(kpis.avgDur) : "—",
+            sub: null,
+            color: SLATE,
+          },
+        ].map((kpi) => (
+          <div key={kpi.label} className="bg-card rounded-xl card-elevated px-5 py-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/50 mb-2">{kpi.label}</p>
+            <p className="text-[22px] font-bold tabular-nums leading-none" style={{ color: kpi.color }}>{kpi.value}</p>
+            {kpi.sub && <p className="text-[10px] font-mono text-muted-foreground/40 mt-1.5">{kpi.sub}</p>}
+          </div>
+        ))}
       </div>
 
       {/* ── 1. Volume & Timing ─────────────────────────────── */}
@@ -349,24 +427,55 @@ export function AnalyticsView({ calls }: Props) {
             </ChartContainer>
           </ChartCard>
 
-          <ChartCard title="Delivery vs Pickup">
-            <ChartContainer config={orderConfig} className="h-[240px] w-full aspect-auto">
-              <BarChart data={orderTypeData} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
-                <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
-                <XAxis dataKey="type" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis yAxisId="left"  hide />
-                <YAxis yAxisId="right" orientation="right" hide />
-                <ChartTooltip
-                  content={
-                    <ChartTooltipContent
-                      formatter={(value, name) => name === "revenue" ? `$${Number(value).toFixed(2)}` : String(value)}
-                    />
-                  }
-                />
-                <Bar yAxisId="left"  dataKey="count"   fill={BRAND} radius={[3, 3, 0, 0]} barSize={32} />
-                <Bar yAxisId="right" dataKey="revenue"  fill={GREEN} radius={[3, 3, 0, 0]} barSize={32} />
-              </BarChart>
-            </ChartContainer>
+          <ChartCard title="Delivery vs Pickup" subtitle="Delivery includes express">
+            {(() => {
+              const [pickup, delivery] = orderTypeData;
+              const total = pickup.count + delivery.count;
+              const pickupPct  = total > 0 ? Math.round((pickup.count  / total) * 100) : 50;
+              const deliveryPct = 100 - pickupPct;
+              const pickupPerCall  = pickup.count  > 0 ? pickup.revenue  / pickup.count  : 0;
+              const deliveryPerCall = delivery.count > 0 ? delivery.revenue / delivery.count : 0;
+              return (
+                <div className="space-y-6 pt-1">
+                  {/* Proportional bar */}
+                  <div>
+                    <div className="flex h-3 rounded-full overflow-hidden">
+                      <div className="h-full transition-all" style={{ width: `${pickupPct}%`, background: BRAND }} />
+                      <div className="h-full transition-all" style={{ width: `${deliveryPct}%`, background: GREEN }} />
+                    </div>
+                    <div className="flex justify-between mt-1">
+                      <span className="text-[9px] font-mono text-muted-foreground/40">{pickupPct}% pickup</span>
+                      <span className="text-[9px] font-mono text-muted-foreground/40">{deliveryPct}% delivery</span>
+                    </div>
+                  </div>
+                  {/* Stat columns */}
+                  <div className="grid grid-cols-2 gap-5">
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: BRAND }} />
+                        <span className="text-[11px] font-semibold">Pickup</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        <StatLine label="Calls"   value={pickup.count.toLocaleString()} />
+                        <StatLine label="Revenue" value={`$${pickup.revenue.toFixed(2)}`} />
+                        <StatLine label="$/call"  value={`$${pickupPerCall.toFixed(2)}`} accent />
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: GREEN }} />
+                        <span className="text-[11px] font-semibold">Delivery</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        <StatLine label="Calls"   value={delivery.count.toLocaleString()} />
+                        <StatLine label="Revenue" value={`$${delivery.revenue.toFixed(2)}`} />
+                        <StatLine label="$/call"  value={`$${deliveryPerCall.toFixed(2)}`} accent />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </ChartCard>
 
         </div>
@@ -421,13 +530,21 @@ export function AnalyticsView({ calls }: Props) {
             </ChartContainer>
           </ChartCard>
 
-          <ChartCard title="Avg Duration by Category">
+          <ChartCard title="Avg Duration by Category" subtitle="Categories with 5+ calls only">
             <ChartContainer config={durConfig} className="h-[220px] w-full aspect-auto">
               <BarChart data={durationByCategory} layout="vertical" margin={{ top: 0, right: 30, bottom: 0, left: 0 }}>
                 <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/40" />
                 <XAxis type="number" hide />
                 <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={100} />
-                <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatDur(Number(value))} />} />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value, _name, item) =>
+                        `${formatDur(Number(value))} · ${(item.payload as { count?: number }).count ?? ""} calls`
+                      }
+                    />
+                  }
+                />
                 <Bar dataKey="avg" fill={AMBER} radius={[0, 3, 3, 0]} barSize={14} />
               </BarChart>
             </ChartContainer>
@@ -436,7 +553,50 @@ export function AnalyticsView({ calls }: Props) {
         </div>
       </section>
 
-      {/* ── 5. Agent Comparison ─────────────────────────────── */}
+      {/* ── 5. Missed Opportunities ─────────────────────────── */}
+      <section>
+        <SectionTitle>Missed Sales Opportunities</SectionTitle>
+        <ChartCard
+          title="Opportunities by Agent"
+          subtitle="Calls where a sale was possible — green = converted, red = missed"
+        >
+          {missedByAgent.length === 0 ? (
+            <p className="text-xs font-mono text-muted-foreground/40 py-8 text-center">No opportunity data in this range</p>
+          ) : (
+            <ChartContainer config={missedConfig} className="w-full aspect-auto" style={{ height: `${Math.max(140, missedByAgent.length * 36 + 20)}px` }}>
+              <BarChart data={missedByAgent} layout="vertical" margin={{ top: 0, right: 56, bottom: 0, left: 0 }}>
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/40" />
+                <XAxis type="number" hide />
+                <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={90} />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value, name) => name === "converted" ? `${value} converted` : `${value} missed`}
+                    />
+                  }
+                />
+                <Bar dataKey="converted" stackId="a" fill={GREEN} radius={[0, 0, 0, 0]} barSize={16} />
+                <Bar dataKey="missed"    stackId="a" fill={RED}   radius={[0, 3, 3, 0]} barSize={16}>
+                  <LabelList
+                    content={(props) => {
+                      const { x, y, width, height, index } = props as { x: number; y: number; width: number; height: number; index: number };
+                      const d = missedByAgent[index];
+                      if (!d) return null;
+                      return (
+                        <text x={Number(x) + Number(width) + 6} y={Number(y) + Number(height) / 2 + 4} fontSize={10} fill="oklch(0.55 0.04 258)" fontFamily="monospace">
+                          {d.rate}%
+                        </text>
+                      );
+                    }}
+                  />
+                </Bar>
+              </BarChart>
+            </ChartContainer>
+          )}
+        </ChartCard>
+      </section>
+
+      {/* ── 6. Agent Comparison ─────────────────────────────── */}
       <section>
         <SectionTitle>Agent Comparison</SectionTitle>
         <div className="bg-card rounded-xl card-elevated p-5">
