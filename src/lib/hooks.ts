@@ -181,14 +181,28 @@ export function useCalls() {
       supabaseRef.current = getSupabaseClient();
     }
     setLoading(true);
-    const { data, error } = await supabaseRef.current
-      .from("calls")
-      .select("*")
-      .order("start_time", { ascending: false });
 
-    if (!error && data) {
-      setCalls(data as CallRecord[]);
+    // Supabase caps queries at 1000 rows by default — paginate to load all records
+    // so stats and analytics always reflect the complete dataset.
+    const PAGE_SIZE = 1000;
+    const allData: CallRecord[] = [];
+    let from = 0;
+    let keepGoing = true;
+
+    while (keepGoing) {
+      const { data, error } = await supabaseRef.current
+        .from("calls")
+        .select("*")
+        .order("start_time", { ascending: false })
+        .range(from, from + PAGE_SIZE - 1);
+
+      if (error || !data || data.length === 0) break;
+      allData.push(...(data as CallRecord[]));
+      keepGoing = data.length === PAGE_SIZE;
+      from += PAGE_SIZE;
     }
+
+    setCalls(allData);
     setLoading(false);
   }, []);
 
