@@ -21,6 +21,11 @@ import {
 } from "@/lib/analytics-utils";
 import { TZ } from "@/lib/timezone";
 import { dateToPacificStr } from "@/lib/timezone";
+import { DATA_QUALITY_CUTOFF } from "@/lib/constants";
+
+const CUTOFF_LABEL = new Date(DATA_QUALITY_CUTOFF).toLocaleDateString("en-US", {
+  month: "short", day: "numeric", timeZone: TZ,
+});
 
 type AnalyticsDateRange = "all" | "yesterday" | "3d" | "5d";
 type Props = { calls: CallRecord[] };
@@ -99,6 +104,53 @@ export function AnalyticsView({ calls }: Props) {
 
   // Processed calls within range — for AI-derived metrics
   const doneCalls = useMemo(() => rangedCalls.filter(c => c.status === "done"), [rangedCalls]);
+
+  // ── Date range info — actual first/last date in each set ──────────────────
+  const rangeInfo = useMemo(() => {
+    if (rangedCalls.length === 0) return null;
+    let maxTs = -Infinity;
+    for (const c of rangedCalls) {
+      if (!c.start_time) continue;
+      const t = new Date(c.start_time).getTime();
+      if (t > maxTs) maxTs = t;
+    }
+    if (!isFinite(maxTs)) return null;
+    const toStr = (ts: number) =>
+      new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: TZ });
+    const distinctDays = new Set(
+      rangedCalls.filter(c => c.start_time).map(c =>
+        new Date(c.start_time!).toLocaleDateString("en-CA", { timeZone: TZ })
+      )
+    ).size;
+    // For "all time", anchor start to the cutoff so the display matches what the data boundary is
+    const start = dateRange === "all" ? CUTOFF_LABEL : toStr(
+      Math.min(...rangedCalls.filter(c => c.start_time).map(c => new Date(c.start_time!).getTime()))
+    );
+    const end = toStr(maxTs);
+    return { start, end, days: distinctDays, label: start === end ? start : `${start} – ${end}` };
+  }, [rangedCalls, dateRange]);
+
+  const allDataInfo = useMemo(() => {
+    if (calls.length === 0) return null;
+    let maxTs = -Infinity;
+    for (const c of calls) {
+      if (!c.start_time) continue;
+      const t = new Date(c.start_time).getTime();
+      if (t > maxTs) maxTs = t;
+    }
+    if (!isFinite(maxTs)) return null;
+    const toStr = (ts: number) =>
+      new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: TZ });
+    const distinctDays = new Set(
+      calls.filter(c => c.start_time).map(c =>
+        new Date(c.start_time!).toLocaleDateString("en-CA", { timeZone: TZ })
+      )
+    ).size;
+    // Always anchor start to the cutoff — pattern charts cover the full dataset from cutoff onward
+    const start = CUTOFF_LABEL;
+    const end = toStr(maxTs);
+    return { start, end, days: distinctDays, label: start === end ? start : `${start} – ${end}` };
+  }, [calls]);
 
   // ── PATTERN CHARTS — always use ALL quality calls, ignore date range ───────
   // Patterns only make sense with as much data as possible (peak hour, busiest weekday, etc.)
@@ -300,7 +352,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
     <div className="space-y-6">
 
       {/* Controls — date range only (no period selector, always daily) */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1">
           {DATE_RANGES.map((r) => (
             <button
@@ -316,9 +368,15 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
             </button>
           ))}
         </div>
-        <span className="text-[11px] font-mono text-muted-foreground/40 tabular-nums">
-          {rangedCalls.length.toLocaleString()} calls
-        </span>
+        {rangeInfo && (
+          <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground/50 tabular-nums">
+            <span className="font-semibold text-muted-foreground/70">{rangeInfo.label}</span>
+            <span className="text-muted-foreground/30">·</span>
+            <span>{rangeInfo.days} day{rangeInfo.days !== 1 ? "s" : ""}</span>
+            <span className="text-muted-foreground/30">·</span>
+            <span>{rangedCalls.length.toLocaleString()} calls</span>
+          </div>
+        )}
       </div>
 
       {/* ── KPI Summary Row ────────────────────────────────── */}
@@ -327,7 +385,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
           {
             label: "Total Calls",
             value: kpis.totalCalls.toLocaleString(),
-            sub: null,
+            sub: rangeInfo ? `${rangeInfo.label} · ${rangeInfo.days}d` : null,
             color: BRAND,
           },
           {
@@ -345,7 +403,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
           {
             label: "Avg Duration",
             value: kpis.avgDur > 0 ? formatDur(kpis.avgDur) : "—",
-            sub: null,
+            sub: rangeInfo ? rangeInfo.label : null,
             color: SLATE,
           },
         ].map((kpi) => (
@@ -363,7 +421,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
 
           {/* Calls by Day — chronological, affected by date range */}
-          <ChartCard title="Calls by Day">
+          <ChartCard title="Calls by Day" subtitle={rangeInfo ? `${rangeInfo.label} · ${rangeInfo.days} day${rangeInfo.days !== 1 ? "s" : ""}` : undefined}>
             <ChartContainer config={volumeConfig} className="h-[180px] w-full aspect-auto">
               <BarChart data={volumeByDay} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
                 <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
@@ -376,7 +434,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
           </ChartCard>
 
           {/* Peak Hours — PATTERN, always all data */}
-          <ChartCard title="Peak Hours (Pacific)" subtitle="Pattern · all available data">
+          <ChartCard title="Peak Hours (Pacific)" subtitle={allDataInfo ? `Pattern · ${allDataInfo.label} · ${allDataInfo.days} days total` : "Pattern · all available data"}>
             <ChartContainer config={volumeConfig} className="h-[180px] w-full aspect-auto">
               <BarChart data={peakHours} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
                 <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
@@ -389,7 +447,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
           </ChartCard>
 
           {/* Day of Week — PATTERN, always all data */}
-          <ChartCard title="Day of Week" subtitle="Pattern · all available data">
+          <ChartCard title="Day of Week" subtitle={allDataInfo ? `Pattern · ${allDataInfo.label} · ${allDataInfo.days} days total` : "Pattern · all available data"}>
             <ChartContainer config={volumeConfig} className="h-[180px] w-full aspect-auto">
               <BarChart data={dayOfWeek} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
                 <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/40" />
@@ -413,7 +471,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
         <SectionTitle>Category & Order Type</SectionTitle>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
 
-          <ChartCard title="Category Breakdown">
+          <ChartCard title="Category Breakdown" subtitle={rangeInfo?.label}>
             <ChartContainer config={catConfig} className="h-[240px] w-full aspect-auto">
               <BarChart data={categoryBreakdown} layout="vertical" margin={{ top: 0, right: 36, bottom: 0, left: 0 }}>
                 <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/40" />
@@ -427,7 +485,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
             </ChartContainer>
           </ChartCard>
 
-          <ChartCard title="Delivery vs Pickup" subtitle="Delivery includes express">
+          <ChartCard title="Delivery vs Pickup" subtitle={rangeInfo ? `${rangeInfo.label} · Delivery includes express` : "Delivery includes express"}>
             {(() => {
               const [pickup, delivery] = orderTypeData;
               const total = pickup.count + delivery.count;
@@ -486,7 +544,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
         <SectionTitle>Sales Performance</SectionTitle>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
 
-          <ChartCard title="Revenue by Day">
+          <ChartCard title="Revenue by Day" subtitle={rangeInfo?.label}>
             <ChartContainer config={revenueConfig} className="h-[200px] w-full aspect-auto">
               <LineChart data={revenueOverTime} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
@@ -498,7 +556,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
             </ChartContainer>
           </ChartCard>
 
-          <ChartCard title="Conversion Rate by Day">
+          <ChartCard title="Conversion Rate by Day" subtitle={rangeInfo?.label}>
             <ChartContainer config={conversionConfig} className="h-[200px] w-full aspect-auto">
               <LineChart data={conversionOverTime} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
@@ -518,7 +576,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
         <SectionTitle>Duration Analytics</SectionTitle>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
 
-          <ChartCard title="Avg Duration by Agent">
+          <ChartCard title="Avg Duration by Agent" subtitle={rangeInfo?.label}>
             <ChartContainer config={durConfig} className="h-[220px] w-full aspect-auto">
               <BarChart data={durationByAgent} layout="vertical" margin={{ top: 0, right: 30, bottom: 0, left: 0 }}>
                 <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/40" />
@@ -530,7 +588,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
             </ChartContainer>
           </ChartCard>
 
-          <ChartCard title="Avg Duration by Category" subtitle="Categories with 5+ calls only">
+          <ChartCard title="Avg Duration by Category" subtitle={rangeInfo ? `${rangeInfo.label} · Min 5 calls` : "Min 5 calls"}>
             <ChartContainer config={durConfig} className="h-[220px] w-full aspect-auto">
               <BarChart data={durationByCategory} layout="vertical" margin={{ top: 0, right: 30, bottom: 0, left: 0 }}>
                 <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/40" />
@@ -558,7 +616,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
         <SectionTitle>Missed Sales Opportunities</SectionTitle>
         <ChartCard
           title="Opportunities by Agent"
-          subtitle="Calls where a sale was possible — green = converted, red = missed"
+          subtitle={rangeInfo ? `${rangeInfo.label} · green = converted, red = missed` : "green = converted, red = missed"}
         >
           {missedByAgent.length === 0 ? (
             <p className="text-xs font-mono text-muted-foreground/40 py-8 text-center">No opportunity data in this range</p>
@@ -600,20 +658,25 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
       <section>
         <SectionTitle>Agent Comparison</SectionTitle>
         <div className="bg-card rounded-xl card-elevated p-5">
-          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/60 w-fit mb-4">
-            {(["revenue", "calls", "score", "conversion"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setAgentMetric(m)}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                  agentMetric === m
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground/60 hover:text-muted-foreground"
-                }`}
-              >
-                {m === "score" ? "Score" : m === "revenue" ? "Revenue" : m === "calls" ? "Calls" : "Conversion"}
-              </button>
-            ))}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/60 w-fit">
+              {(["revenue", "calls", "score", "conversion"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setAgentMetric(m)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                    agentMetric === m
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground/60 hover:text-muted-foreground"
+                  }`}
+                >
+                  {m === "score" ? "Score" : m === "revenue" ? "Revenue" : m === "calls" ? "Calls" : "Conversion"}
+                </button>
+              ))}
+            </div>
+            {rangeInfo && (
+              <span className="text-[10px] font-mono text-muted-foreground/40 tabular-nums">{rangeInfo.label}</span>
+            )}
           </div>
           <ChartContainer config={agentConfig} className="h-[260px] w-full aspect-auto">
             <BarChart data={agentComparison} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
