@@ -210,18 +210,61 @@ export default function Dashboard() {
 
         {/* View toggle */}
         <BlurFade delay={0.10} duration={0.45}>
-          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/60 w-fit">
-            {(["calls", "agents", "analytics"] as const).map((v) => (
+          <div className="flex items-center gap-0.5 p-1 rounded-xl bg-muted border border-border w-fit">
+            {(
+              [
+                {
+                  key: "calls",
+                  label: "Calls",
+                  icon: (
+                    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="shrink-0">
+                      <path d="M2.5 2h8a.5.5 0 01.5.5v8a.5.5 0 01-.5.5h-8A.5.5 0 012 10.5v-8A.5.5 0 012.5 2z" stroke="currentColor" strokeWidth="1.1"/>
+                      <path d="M4 5h5M4 7h3.5M4 9h4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
+                    </svg>
+                  ),
+                },
+                {
+                  key: "agents",
+                  label: "Agents",
+                  icon: (
+                    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="shrink-0">
+                      <circle cx="6.5" cy="4.5" r="2" stroke="currentColor" strokeWidth="1.1"/>
+                      <path d="M2 11c0-2.21 2.015-4 4.5-4s4.5 1.79 4.5 4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
+                    </svg>
+                  ),
+                },
+                {
+                  key: "analytics",
+                  label: "Analytics",
+                  icon: (
+                    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="shrink-0">
+                      <path d="M2 10.5l2.5-3 2.5 1.5 2-3L11 7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/>
+                      <circle cx="2" cy="10.5" r="0.75" fill="currentColor"/>
+                      <circle cx="4.5" cy="7.5" r="0.75" fill="currentColor"/>
+                      <circle cx="7" cy="9" r="0.75" fill="currentColor"/>
+                      <circle cx="9" cy="6" r="0.75" fill="currentColor"/>
+                      <circle cx="11" cy="7" r="0.75" fill="currentColor"/>
+                    </svg>
+                  ),
+                },
+              ] as const
+            ).map(({ key, label, icon }) => (
               <button
-                key={v}
-                onClick={() => setView(v)}
-                className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                  view === v
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground/60 hover:text-muted-foreground"
+                key={key}
+                onClick={() => setView(key)}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer ${
+                  view === key
+                    ? "text-white shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10"
                 }`}
+                style={
+                  view === key
+                    ? { background: "oklch(0.56 0.23 275)", boxShadow: "0 1px 3px oklch(0.56 0.23 275 / 0.35)" }
+                    : undefined
+                }
               >
-                {v === "calls" ? "Calls" : v === "agents" ? "Agents" : "Analytics"}
+                {icon}
+                {label}
               </button>
             ))}
           </div>
