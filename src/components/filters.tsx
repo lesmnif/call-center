@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -15,9 +15,9 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { ChevronDown, X, Search, ArrowDown, ArrowUp } from "lucide-react";
+import { ChevronDown, X, Search, ArrowDown, ArrowUp, Calendar } from "lucide-react";
 import { type CallRecord } from "@/lib/supabase";
-import { todayPacific, dateToPacificStr } from "@/lib/timezone";
+import { TZ, todayPacific, dateToPacificStr } from "@/lib/timezone";
 
 export type FilterState = {
   search: string;
@@ -28,7 +28,9 @@ export type FilterState = {
   outcome: string;
   salesActivity: string;
   orderType: string;
-  dateRange: "all" | "today" | "yesterday" | "3d" | "5d";
+  dateRange: "all" | "today" | "yesterday" | "3d" | "5d" | "custom";
+  customDateFrom: string;
+  customDateTo: string;
   timeSort: "desc" | "asc";
 };
 
@@ -40,13 +42,40 @@ type Props = {
 
 const ALL = "__all__";
 
-const DATE_RANGES: { value: FilterState["dateRange"]; label: string }[] = [
+const DATE_PRESETS: { value: FilterState["dateRange"]; label: string }[] = [
   { value: "all",       label: "All time"   },
   { value: "today",     label: "Today"      },
   { value: "yesterday", label: "Yesterday"  },
   { value: "3d",        label: "3 days"     },
   { value: "5d",        label: "5 days"     },
 ];
+
+function fmtDate(d: string) {
+  if (!d) return "";
+  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+const QUICK_RANGES = [
+  { label: "Last 7d",    key: "7d"        },
+  { label: "Last 14d",   key: "14d"       },
+  { label: "This month", key: "month"     },
+  { label: "Last month", key: "lastmonth" },
+];
+
+function getQuickRange(key: string): { from: string; to: string } {
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const [y, m] = todayStr.split("-").map(Number);
+  if (key === "7d")  return { from: new Date(Date.now() -  6 * 86_400_000).toLocaleDateString("en-CA", { timeZone: TZ }), to: todayStr };
+  if (key === "14d") return { from: new Date(Date.now() - 13 * 86_400_000).toLocaleDateString("en-CA", { timeZone: TZ }), to: todayStr };
+  if (key === "month") return { from: `${y}-${String(m).padStart(2, "0")}-01`, to: todayStr };
+  if (key === "lastmonth") {
+    const prevM = m === 1 ? 12 : m - 1;
+    const prevY = m === 1 ? y - 1 : y;
+    const lastDay = new Date(y, m - 1, 0).toLocaleDateString("en-CA", { timeZone: TZ });
+    return { from: `${prevY}-${String(prevM).padStart(2, "0")}-01`, to: lastDay };
+  }
+  return { from: "", to: "" };
+}
 
 function FilterCombobox({
   label,
@@ -158,6 +187,17 @@ export function Filters({ calls, filters, onChange }: Props) {
   ].filter(Boolean).length;
 
   const hasFilters = !!filters.search || activeCount > 0;
+
+  const customRangeCount = useMemo(() => {
+    if (!filters.customDateFrom && !filters.customDateTo) return null;
+    return calls.filter((c) => {
+      if (!c.start_time) return false;
+      const pd = dateToPacificStr(new Date(c.start_time));
+      if (filters.customDateFrom && pd < filters.customDateFrom) return false;
+      if (filters.customDateTo   && pd > filters.customDateTo)   return false;
+      return true;
+    }).length;
+  }, [calls, filters.customDateFrom, filters.customDateTo]);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -276,7 +316,7 @@ export function Filters({ calls, filters, onChange }: Props) {
       </button>
 
       <div className="flex items-center gap-1">
-        {DATE_RANGES.map((d) => {
+        {DATE_PRESETS.map((d) => {
           const isActive = filters.dateRange === d.value;
           return (
             <button
@@ -292,6 +332,97 @@ export function Filters({ calls, filters, onChange }: Props) {
             </button>
           );
         })}
+
+        {/* Custom date range picker */}
+        <Popover>
+          <PopoverTrigger
+            onClick={() => { if (filters.dateRange !== "custom") onChange({ ...filters, dateRange: "custom" }); }}
+            className={`inline-flex items-center gap-1.5 h-8 px-3 text-xs rounded-lg border transition-all cursor-pointer select-none ${
+              filters.dateRange === "custom"
+                ? "bg-primary/8 border-primary/30 text-primary font-medium"
+                : "border-border bg-card text-muted-foreground hover:text-foreground hover:border-border/80"
+            }`}
+          >
+            <Calendar className="w-3 h-3 opacity-60 shrink-0" />
+            {filters.dateRange === "custom" && (filters.customDateFrom || filters.customDateTo) ? (
+              <>
+                {filters.customDateFrom ? fmtDate(filters.customDateFrom) : "…"}
+                {" – "}
+                {filters.customDateTo ? fmtDate(filters.customDateTo) : "…"}
+                {customRangeCount !== null && (
+                  <span className="font-mono text-[9px] opacity-55 ml-0.5">· {customRangeCount.toLocaleString()}</span>
+                )}
+              </>
+            ) : "Custom"}
+            {filters.dateRange === "custom" && (filters.customDateFrom || filters.customDateTo) && (
+              <span
+                role="button"
+                onClick={(e) => { e.stopPropagation(); onChange({ ...filters, dateRange: "all", customDateFrom: "", customDateTo: "" }); }}
+                className="ml-0.5 rounded hover:bg-primary/15 p-0.5 -mr-0.5 cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </span>
+            )}
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-56 p-3 space-y-3">
+            {/* Quick range chips */}
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 mb-1.5">Quick select</p>
+              <div className="flex flex-wrap gap-1">
+                {QUICK_RANGES.map(({ label, key }) => {
+                  const r = getQuickRange(key);
+                  const isActive = filters.customDateFrom === r.from && filters.customDateTo === r.to;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => onChange({ ...filters, dateRange: "custom", customDateFrom: r.from, customDateTo: r.to })}
+                      className={`h-6 px-2 text-[10px] rounded-md border cursor-pointer transition-all ${
+                        isActive
+                          ? "bg-primary/8 border-primary/30 text-primary font-semibold"
+                          : "border-border bg-muted/50 text-muted-foreground hover:text-foreground hover:border-border/80"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="h-px bg-border" />
+
+            {/* Date inputs */}
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 block">From</label>
+                <input
+                  type="date"
+                  value={filters.customDateFrom}
+                  max={filters.customDateTo || undefined}
+                  onChange={(e) => onChange({ ...filters, dateRange: "custom", customDateFrom: e.target.value })}
+                  className="w-full h-8 px-2 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:border-primary/50 transition-colors"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 block">To</label>
+                <input
+                  type="date"
+                  value={filters.customDateTo}
+                  min={filters.customDateFrom || undefined}
+                  onChange={(e) => onChange({ ...filters, dateRange: "custom", customDateTo: e.target.value })}
+                  className="w-full h-8 px-2 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:border-primary/50 transition-colors"
+                />
+              </div>
+            </div>
+
+            {/* Live count */}
+            {customRangeCount !== null && (
+              <p className="text-[10px] font-mono text-muted-foreground/50 text-right tabular-nums pt-0.5">
+                {customRangeCount.toLocaleString()} call{customRangeCount !== 1 ? "s" : ""} in range
+              </p>
+            )}
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Clear all */}
@@ -300,7 +431,7 @@ export function Filters({ calls, filters, onChange }: Props) {
           <div className="h-5 w-px bg-border" />
           <button
             onClick={() =>
-              onChange({ search: "", store: ALL, agent: ALL, category: ALL, sentiment: ALL, outcome: ALL, salesActivity: ALL, orderType: ALL, dateRange: "all", timeSort: filters.timeSort })
+              onChange({ search: "", store: ALL, agent: ALL, category: ALL, sentiment: ALL, outcome: ALL, salesActivity: ALL, orderType: ALL, dateRange: "all", customDateFrom: "", customDateTo: "", timeSort: filters.timeSort })
             }
             className="h-8 px-2.5 text-xs text-muted-foreground/50 hover:text-foreground/70 transition-colors flex items-center gap-1 cursor-pointer"
           >
@@ -353,6 +484,9 @@ export function applyFilters(calls: CallRecord[], filters: FilterState): CallRec
       } else if (filters.dateRange === "yesterday") {
         const yesterday = dateToPacificStr(new Date(Date.now() - 86_400_000));
         if (pacificDate !== yesterday) return false;
+      } else if (filters.dateRange === "custom") {
+        if (filters.customDateFrom && pacificDate < filters.customDateFrom) return false;
+        if (filters.customDateTo   && pacificDate > filters.customDateTo)   return false;
       } else {
         const days = filters.dateRange === "3d" ? 3 : 5;
         const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();

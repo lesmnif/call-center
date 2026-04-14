@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
 import {
   BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Cell, LabelList,
@@ -21,13 +21,46 @@ import {
 } from "@/lib/analytics-utils";
 import { TZ } from "@/lib/timezone";
 import { dateToPacificStr } from "@/lib/timezone";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Calendar, X } from "lucide-react";
 import { DATA_QUALITY_CUTOFF } from "@/lib/constants";
 
 const CUTOFF_LABEL = new Date(DATA_QUALITY_CUTOFF).toLocaleDateString("en-US", {
   month: "short", day: "numeric", timeZone: TZ,
 });
 
-type AnalyticsDateRange = "all" | "yesterday" | "3d" | "5d";
+type AnalyticsDateRange = "all" | "yesterday" | "3d" | "5d" | "custom";
+
+function fmtDate(d: string) {
+  if (!d) return "";
+  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+const QUICK_RANGES = [
+  { label: "Last 7d",    key: "7d"        },
+  { label: "Last 14d",   key: "14d"       },
+  { label: "This month", key: "month"     },
+  { label: "Last month", key: "lastmonth" },
+];
+
+function getQuickRange(key: string): { from: string; to: string } {
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const [y, m] = todayStr.split("-").map(Number);
+  if (key === "7d")  return { from: new Date(Date.now() -  6 * 86_400_000).toLocaleDateString("en-CA", { timeZone: TZ }), to: todayStr };
+  if (key === "14d") return { from: new Date(Date.now() - 13 * 86_400_000).toLocaleDateString("en-CA", { timeZone: TZ }), to: todayStr };
+  if (key === "month") return { from: `${y}-${String(m).padStart(2, "0")}-01`, to: todayStr };
+  if (key === "lastmonth") {
+    const prevM = m === 1 ? 12 : m - 1;
+    const prevY = m === 1 ? y - 1 : y;
+    const lastDay = new Date(y, m - 1, 0).toLocaleDateString("en-CA", { timeZone: TZ });
+    return { from: `${prevY}-${String(prevM).padStart(2, "0")}-01`, to: lastDay };
+  }
+  return { from: "", to: "" };
+}
 type Props = { calls: CallRecord[] };
 
 const BRAND = "oklch(0.56 0.23 275)";
@@ -38,7 +71,7 @@ const SLATE = "oklch(0.55 0.04 258)";
 
 const DAYS_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const DATE_RANGES: { value: AnalyticsDateRange; label: string }[] = [
+const DATE_PRESETS: { value: AnalyticsDateRange; label: string }[] = [
   { value: "all",       label: "All time"  },
   { value: "yesterday", label: "Yesterday" },
   { value: "3d",        label: "3 days"    },
@@ -89,6 +122,10 @@ function ChartCard({
 
 export function AnalyticsView({ calls }: Props) {
   const [dateRange, setDateRange] = useState<AnalyticsDateRange>("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  // track whether popover is open so we can keep "custom" active while editing
+  const customOpenRef = useRef(false);
 
   // ── Date range filter — affects time-series and breakdown charts only ─────
   const rangedCalls = useMemo(() => {
@@ -97,10 +134,19 @@ export function AnalyticsView({ calls }: Props) {
       const yesterday = dateToPacificStr(new Date(Date.now() - 86_400_000));
       return calls.filter(c => c.start_time && dateToPacificStr(new Date(c.start_time)) === yesterday);
     }
+    if (dateRange === "custom") {
+      return calls.filter(c => {
+        if (!c.start_time) return false;
+        const pd = dateToPacificStr(new Date(c.start_time));
+        if (customFrom && pd < customFrom) return false;
+        if (customTo   && pd > customTo)   return false;
+        return true;
+      });
+    }
     const days = dateRange === "3d" ? 3 : 5;
     const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
     return calls.filter(c => c.start_time && c.start_time >= cutoff);
-  }, [calls, dateRange]);
+  }, [calls, dateRange, customFrom, customTo]);
 
   // Processed calls within range — for AI-derived metrics
   const doneCalls = useMemo(() => rangedCalls.filter(c => c.status === "done"), [rangedCalls]);
@@ -354,7 +400,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
       {/* Controls — date range only (no period selector, always daily) */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1">
-          {DATE_RANGES.map((r) => (
+          {DATE_PRESETS.map((r) => (
             <button
               key={r.value}
               onClick={() => setDateRange(r.value)}
@@ -367,6 +413,95 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
               {r.label}
             </button>
           ))}
+
+          {/* Custom date range */}
+          <Popover onOpenChange={(open) => { customOpenRef.current = open; }}>
+            <PopoverTrigger
+              onClick={() => setDateRange("custom")}
+              className={`inline-flex items-center gap-1.5 h-8 px-3 text-xs rounded-lg border transition-all cursor-pointer select-none ${
+                dateRange === "custom"
+                  ? "bg-primary/8 border-primary/30 text-primary font-medium"
+                  : "border-border bg-card text-muted-foreground hover:text-foreground hover:border-border/80"
+              }`}
+            >
+              <Calendar className="w-3 h-3 opacity-60 shrink-0" />
+              {dateRange === "custom" && (customFrom || customTo) ? (
+                <>
+                  {customFrom ? fmtDate(customFrom) : "…"}
+                  {" – "}
+                  {customTo ? fmtDate(customTo) : "…"}
+                  <span className="font-mono text-[9px] opacity-55 ml-0.5">· {rangedCalls.length.toLocaleString()}</span>
+                </>
+              ) : "Custom"}
+              {dateRange === "custom" && (customFrom || customTo) && (
+                <span
+                  role="button"
+                  onClick={(e) => { e.stopPropagation(); setCustomFrom(""); setCustomTo(""); setDateRange("all"); }}
+                  className="ml-0.5 rounded hover:bg-primary/15 p-0.5 -mr-0.5 cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </span>
+              )}
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-56 p-3 space-y-3">
+              {/* Quick range chips */}
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 mb-1.5">Quick select</p>
+                <div className="flex flex-wrap gap-1">
+                  {QUICK_RANGES.map(({ label, key }) => {
+                    const r = getQuickRange(key);
+                    const isActive = customFrom === r.from && customTo === r.to;
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => { setCustomFrom(r.from); setCustomTo(r.to); setDateRange("custom"); }}
+                        className={`h-6 px-2 text-[10px] rounded-md border cursor-pointer transition-all ${
+                          isActive
+                            ? "bg-primary/8 border-primary/30 text-primary font-semibold"
+                            : "border-border bg-muted/50 text-muted-foreground hover:text-foreground hover:border-border/80"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="h-px bg-border" />
+
+              {/* Date inputs */}
+              <div className="space-y-2">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 block">From</label>
+                  <input
+                    type="date"
+                    value={customFrom}
+                    max={customTo || undefined}
+                    onChange={(e) => { setCustomFrom(e.target.value); setDateRange("custom"); }}
+                    className="w-full h-8 px-2 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:border-primary/50 transition-colors"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 block">To</label>
+                  <input
+                    type="date"
+                    value={customTo}
+                    min={customFrom || undefined}
+                    onChange={(e) => { setCustomTo(e.target.value); setDateRange("custom"); }}
+                    className="w-full h-8 px-2 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:border-primary/50 transition-colors"
+                  />
+                </div>
+              </div>
+
+              {/* Live count */}
+              {(customFrom || customTo) && (
+                <p className="text-[10px] font-mono text-muted-foreground/50 text-right tabular-nums pt-0.5">
+                  {rangedCalls.length.toLocaleString()} call{rangedCalls.length !== 1 ? "s" : ""} in range
+                </p>
+              )}
+            </PopoverContent>
+          </Popover>
         </div>
         {rangeInfo && (
           <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground/50 tabular-nums">

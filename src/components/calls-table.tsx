@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { ChevronUp, ChevronDown, ChevronsUpDown, SearchX } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, SearchX, ChevronLeft, ChevronRight } from "lucide-react";
+
+const PAGE_SIZE = 50;
 import { type CallRecord } from "@/lib/supabase";
 import { TZ, todayPacific, dateToPacificStr } from "@/lib/timezone";
 import { CallDetail } from "./call-detail";
@@ -66,6 +68,10 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
   const [selected, setSelected] = useState<CallRecord | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [page, setPage] = useState(0);
+
+  // Reset to first page whenever the call list or sort changes
+  useEffect(() => { setPage(0); }, [calls, sortKey, sortDir]);
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
@@ -105,6 +111,9 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
       return sortDir === "asc" ? cmp : -cmp;
     });
   }, [calls, sortKey, sortDir]);
+
+  const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
+  const paginated = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   if (calls.length === 0) {
     if (isFiltered) {
@@ -189,7 +198,7 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
 
         {/* Rows */}
         <div className="divide-y divide-border/60">
-          {sorted.map((call) => {
+          {paginated.map((call) => {
             const isDone       = call.status === "done";
             const isProcessing = call.status === "processing";
             const isPending    = call.status === "pending" || call.status === "failed";
@@ -356,6 +365,34 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
             );
           })}
         </div>
+
+        {/* Pagination footer */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-muted/30">
+            <span className="text-[11px] font-mono text-muted-foreground/50">
+              {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, sorted.length)} of {sorted.length}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="p-1.5 rounded-md hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5 text-muted-foreground" />
+              </button>
+              <span className="text-[11px] font-mono text-muted-foreground/60 px-2">
+                {page + 1} / {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page === totalPages - 1}
+                className="p-1.5 rounded-md hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <CallDetail

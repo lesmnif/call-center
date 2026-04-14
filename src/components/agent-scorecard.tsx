@@ -1,7 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronUp, ChevronDown, ChevronsUpDown, ArrowLeft } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, ArrowLeft, Calendar, X } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from "recharts";
@@ -92,9 +97,9 @@ const COLUMN_TOOLTIPS: Record<string, string> = {
   "$/call": "Average revenue per call handled",
 };
 
-type AgentDateRange = "all" | "today" | "yesterday" | "3d" | "5d";
+type AgentDateRange = "all" | "today" | "yesterday" | "3d" | "5d" | "custom";
 
-const DATE_RANGES: { value: AgentDateRange; label: string }[] = [
+const DATE_PRESETS: { value: AgentDateRange; label: string }[] = [
   { value: "all",       label: "All time"   },
   { value: "today",     label: "Today"      },
   { value: "yesterday", label: "Yesterday"  },
@@ -102,13 +107,45 @@ const DATE_RANGES: { value: AgentDateRange; label: string }[] = [
   { value: "5d",        label: "5 days"     },
 ];
 
-function filterCallsByDate(calls: CallRecord[], range: AgentDateRange): CallRecord[] {
+function fmtDate(d: string) {
+  if (!d) return "";
+  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+const QUICK_RANGES = [
+  { label: "Last 7d",    key: "7d"        },
+  { label: "Last 14d",   key: "14d"       },
+  { label: "This month", key: "month"     },
+  { label: "Last month", key: "lastmonth" },
+];
+
+function getQuickRange(key: string): { from: string; to: string } {
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const [y, m] = todayStr.split("-").map(Number);
+  if (key === "7d")  return { from: new Date(Date.now() -  6 * 86_400_000).toLocaleDateString("en-CA", { timeZone: TZ }), to: todayStr };
+  if (key === "14d") return { from: new Date(Date.now() - 13 * 86_400_000).toLocaleDateString("en-CA", { timeZone: TZ }), to: todayStr };
+  if (key === "month") return { from: `${y}-${String(m).padStart(2, "0")}-01`, to: todayStr };
+  if (key === "lastmonth") {
+    const prevM = m === 1 ? 12 : m - 1;
+    const prevY = m === 1 ? y - 1 : y;
+    const lastDay = new Date(y, m - 1, 0).toLocaleDateString("en-CA", { timeZone: TZ });
+    return { from: `${prevY}-${String(prevM).padStart(2, "0")}-01`, to: lastDay };
+  }
+  return { from: "", to: "" };
+}
+
+function filterCallsByDate(calls: CallRecord[], range: AgentDateRange, customFrom = "", customTo = ""): CallRecord[] {
   if (range === "all") return calls;
   return calls.filter((c) => {
     if (!c.start_time) return false;
     const pacificDate = dateToPacificStr(new Date(c.start_time));
     if (range === "today") return pacificDate === todayPacific();
     if (range === "yesterday") return pacificDate === dateToPacificStr(new Date(Date.now() - 86_400_000));
+    if (range === "custom") {
+      if (customFrom && pacificDate < customFrom) return false;
+      if (customTo   && pacificDate > customTo)   return false;
+      return true;
+    }
     const days = range === "3d" ? 3 : 5;
     const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
     return c.start_time >= cutoff;
@@ -662,8 +699,13 @@ export function AgentScorecard({ calls, onProcess }: Props) {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<AgentDateRange>("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
 
-  const filteredCalls = useMemo(() => filterCallsByDate(calls, dateRange), [calls, dateRange]);
+  const filteredCalls = useMemo(
+    () => filterCallsByDate(calls, dateRange, customFrom, customTo),
+    [calls, dateRange, customFrom, customTo]
+  );
   const agents = useMemo(() => buildAgentRows(filteredCalls), [filteredCalls]);
 
   // Sort: low-sample agents always go to bottom regardless of sort
@@ -732,8 +774,8 @@ export function AgentScorecard({ calls, onProcess }: Props) {
       <div className="space-y-4">
 
         {/* Date range filter */}
-        <div className="flex items-center gap-1">
-          {DATE_RANGES.map((d) => {
+        <div className="flex items-center gap-1 flex-wrap">
+          {DATE_PRESETS.map((d) => {
             const isActive = dateRange === d.value;
             return (
               <button
@@ -749,6 +791,96 @@ export function AgentScorecard({ calls, onProcess }: Props) {
               </button>
             );
           })}
+
+          {/* Custom date range */}
+          <Popover>
+            <PopoverTrigger
+              onClick={() => setDateRange("custom")}
+              className={`inline-flex items-center gap-1.5 h-8 px-3 text-xs rounded-lg border transition-all cursor-pointer select-none ${
+                dateRange === "custom"
+                  ? "bg-primary/8 border-primary/30 text-primary font-medium"
+                  : "border-border bg-card text-muted-foreground hover:text-foreground hover:border-border/80"
+              }`}
+            >
+              <Calendar className="w-3 h-3 opacity-60 shrink-0" />
+              {dateRange === "custom" && (customFrom || customTo) ? (
+                <>
+                  {customFrom ? fmtDate(customFrom) : "…"}
+                  {" – "}
+                  {customTo ? fmtDate(customTo) : "…"}
+                  <span className="font-mono text-[9px] opacity-55 ml-0.5">· {filteredCalls.length.toLocaleString()}</span>
+                </>
+              ) : "Custom"}
+              {dateRange === "custom" && (customFrom || customTo) && (
+                <span
+                  role="button"
+                  onClick={(e) => { e.stopPropagation(); setCustomFrom(""); setCustomTo(""); setDateRange("all"); }}
+                  className="ml-0.5 rounded hover:bg-primary/15 p-0.5 -mr-0.5 cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </span>
+              )}
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-56 p-3 space-y-3">
+              {/* Quick range chips */}
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 mb-1.5">Quick select</p>
+                <div className="flex flex-wrap gap-1">
+                  {QUICK_RANGES.map(({ label, key }) => {
+                    const r = getQuickRange(key);
+                    const isActive = customFrom === r.from && customTo === r.to;
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => { setCustomFrom(r.from); setCustomTo(r.to); setDateRange("custom"); }}
+                        className={`h-6 px-2 text-[10px] rounded-md border cursor-pointer transition-all ${
+                          isActive
+                            ? "bg-primary/8 border-primary/30 text-primary font-semibold"
+                            : "border-border bg-muted/50 text-muted-foreground hover:text-foreground hover:border-border/80"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="h-px bg-border" />
+
+              {/* Date inputs */}
+              <div className="space-y-2">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 block">From</label>
+                  <input
+                    type="date"
+                    value={customFrom}
+                    max={customTo || undefined}
+                    onChange={(e) => { setCustomFrom(e.target.value); setDateRange("custom"); }}
+                    className="w-full h-8 px-2 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:border-primary/50 transition-colors"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/50 block">To</label>
+                  <input
+                    type="date"
+                    value={customTo}
+                    min={customFrom || undefined}
+                    onChange={(e) => { setCustomTo(e.target.value); setDateRange("custom"); }}
+                    className="w-full h-8 px-2 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:border-primary/50 transition-colors"
+                  />
+                </div>
+              </div>
+
+              {/* Live count */}
+              {(customFrom || customTo) && (
+                <p className="text-[10px] font-mono text-muted-foreground/50 text-right tabular-nums pt-0.5">
+                  {filteredCalls.length.toLocaleString()} call{filteredCalls.length !== 1 ? "s" : ""} in range
+                </p>
+              )}
+            </PopoverContent>
+          </Popover>
+
           {dateRange !== "all" && (
             <span className="text-[11px] font-mono text-muted-foreground/40 ml-2">
               {agents.length} agent{agents.length !== 1 ? "s" : ""} · {filteredCalls.filter(c => c.status === "done").length} calls

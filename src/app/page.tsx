@@ -9,6 +9,7 @@ import { Filters, applyFilters, type FilterState } from "@/components/filters";
 import { CallsTable } from "@/components/calls-table";
 import { AgentScorecard } from "@/components/agent-scorecard";
 import { AnalyticsView } from "@/components/analytics-view";
+import { ReportsPanel } from "@/components/reports-panel";
 import { DATA_QUALITY_CUTOFF } from "@/lib/constants";
 
 // Pre-parsed once — avoids re-parsing the offset string on every render/filter
@@ -24,6 +25,8 @@ const DEFAULT_FILTERS: FilterState = {
   salesActivity: "__all__",
   orderType: "__all__",
   dateRange: "all",
+  customDateFrom: "",
+  customDateTo: "",
   timeSort: "desc",
 };
 
@@ -32,7 +35,7 @@ export default function Dashboard() {
   const { processing, events: processEvents, progress, startProcess } = useProcess();
   const { calls, loading, refetch } = useCalls();
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
-  const [view, setView] = useState<"calls" | "agents" | "analytics">("calls");
+  const [view, setView] = useState<"calls" | "agents" | "analytics" | "reports">("calls");
   const hasAutoSynced = useRef(false);
   const autoDispatchedIds = useRef<Set<number>>(new Set());
 
@@ -247,6 +250,16 @@ export default function Dashboard() {
                     </svg>
                   ),
                 },
+                {
+                  key: "reports",
+                  label: "Reports",
+                  icon: (
+                    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="shrink-0">
+                      <path d="M3 2h7a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.1"/>
+                      <path d="M4.5 5h4M4.5 7h3M4.5 9h3.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
+                    </svg>
+                  ),
+                },
               ] as const
             ).map(({ key, label, icon }) => (
               <button
@@ -300,9 +313,13 @@ export default function Dashboard() {
           <BlurFade delay={0.12} duration={0.45}>
             <AgentScorecard calls={qualityCalls} onProcess={handleProcessOne} />
           </BlurFade>
-        ) : (
+        ) : view === "analytics" ? (
           <BlurFade delay={0.12} duration={0.45}>
             <AnalyticsView calls={qualityCalls} />
+          </BlurFade>
+        ) : (
+          <BlurFade delay={0.12} duration={0.45}>
+            <ReportsPanel calls={qualityCalls} />
           </BlurFade>
         )}
 
