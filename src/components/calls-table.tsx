@@ -70,8 +70,9 @@ export function CallsTable({ calls, onProcess, isFiltered = false, timeSort = "d
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
 
-  // Reset to first page whenever the call list or sort changes
-  useEffect(() => { setPage(0); }, [calls, sortKey, sortDir]);
+  // Reset to first page when the number of calls changes (filter/sync) or sort changes.
+  // Using calls.length instead of calls avoids resetting on data refreshes that don't change the list size.
+  useEffect(() => { setPage(0); }, [calls.length, sortKey, sortDir]);
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {

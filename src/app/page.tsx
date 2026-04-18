@@ -110,20 +110,30 @@ export default function Dashboard() {
     }
   }, [syncing, syncResult, loading, autoPendingIds, autoFailedIds, processing, startProcess]);
 
-  // After each processing run ends: refetch, then reset dispatched tracking
-  // so any calls that are still 'pending' (missed for any reason) get picked up.
-  const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Refresh table data every 10s during processing so rows update as they complete.
+  // Safe: auto-dispatch checks !processing, so this won't restart the batch.
   useEffect(() => {
-    const lastEvent = processEvents[processEvents.length - 1];
-    if (lastEvent?.type === "done" || lastEvent?.type === "fatal") {
-      if (refetchTimer.current) clearTimeout(refetchTimer.current);
-      refetchTimer.current = setTimeout(() => {
-        // Clear only — failed calls won't re-enter because they're excluded from autoPendingIds
+    if (!processing) return;
+    const interval = setInterval(refetch, 10_000);
+    return () => clearInterval(interval);
+  }, [processing, refetch]);
+
+  // After the entire batch finishes: refetch, then reset dispatched tracking
+  // so any calls that are still 'pending' (missed for any reason) get picked up.
+  const prevProcessing = useRef(false);
+  useEffect(() => {
+    const wasProcessing = prevProcessing.current;
+    prevProcessing.current = processing;
+
+    // Only trigger when processing transitions from true → false (batch completed)
+    if (wasProcessing && !processing) {
+      const timer = setTimeout(() => {
         autoDispatchedIds.current.clear();
         refetch();
       }, 500);
+      return () => clearTimeout(timer);
     }
-  }, [processEvents, refetch]);
+  }, [processing, refetch]);
 
   const handleProcessOne = useCallback(
     (recordingId: number) => startProcess([recordingId]),

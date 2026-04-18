@@ -44,13 +44,14 @@ export function SyncBar({
   }, [processing]);
 
   const errorCount = events.filter((e) => e.type === "error").length;
-  const lastDone = [...events]
-    .reverse()
-    .find((e) => e.type === "done") as Extract<ProcessEvent, { type: "done" }> | null;
+  const doneEvents = events.filter((e) => e.type === "done") as Extract<ProcessEvent, { type: "done" }>[];
+  const totalProcessed = doneEvents.reduce((sum, e) => sum + e.processed, 0);
+  const totalFailed = doneEvents.reduce((sum, e) => sum + e.failed, 0);
+  const hasDoneEvents = doneEvents.length > 0;
 
   const stepLabel = progress?.step ?? "processing";
   const busy = syncing || processing;
-  const doneWithFailures = !processing && lastDone && lastDone.failed > 0;
+  const doneWithFailures = !processing && hasDoneEvents && totalFailed > 0;
   const isHealthy = !busy && !doneWithFailures && pendingCount === 0;
 
   const pct =
@@ -65,7 +66,7 @@ export function SyncBar({
     ? "oklch(0.72 0.15 60)"        // amber
     : doneWithFailures
     ? "oklch(0.65 0.17 50)"        // orange
-    : isHealthy || (lastDone && lastDone.failed === 0)
+    : isHealthy || (hasDoneEvents && totalFailed === 0)
     ? "oklch(0.59 0.17 148)"       // green
     : "oklch(0.59 0.17 148)";      // green
 
@@ -75,8 +76,8 @@ export function SyncBar({
       : "Starting..."
     : syncing
     ? "Syncing from 3CX..."
-    : lastDone
-    ? `Done — ${lastDone.processed} processed${lastDone.failed > 0 ? `, ${lastDone.failed} failed` : ""}`
+    : hasDoneEvents
+    ? `Done — ${totalProcessed} processed${totalFailed > 0 ? `, ${totalFailed} failed` : ""}`
     : pendingCount > 0
     ? `${pendingCount} recording${pendingCount === 1 ? "" : "s"} pending analysis`
     : "Up to date";

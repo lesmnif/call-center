@@ -19,10 +19,23 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let closed = false;
+
       function send(data: Record<string, unknown>) {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
-        );
+        if (closed) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
+          );
+        } catch {
+          closed = true;
+        }
+      }
+
+      function close() {
+        if (closed) return;
+        closed = true;
+        try { controller.close(); } catch { /* already closed */ }
       }
 
       const supabase = getSupabaseServer();
@@ -39,7 +52,6 @@ export async function POST(req: NextRequest) {
         if (fetchError || !recording) {
           console.log(`[process] Recording ${recordingId} not found:`, fetchError?.message);
           send({ type: "fatal", message: `Recording ${recordingId} not found` });
-          controller.close();
           return;
         }
 
@@ -56,11 +68,19 @@ export async function POST(req: NextRequest) {
             { onConflict: "recording_id" }
           );
           send({ type: "done", processed: 0, failed: 0 });
-          controller.close();
           return;
         }
 
-        // Atomically claim this recording — only if still pending/failed
+        // Reset stale processing records (stuck > 5 min) so they can be reclaimed
+        const staleThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        await supabase
+          .from("calls")
+          .update({ status: "failed" })
+          .eq("recording_id", recordingId)
+          .eq("status", "processing")
+          .lt("processing_started_at", staleThreshold);
+
+        // Atomically claim this recording — only if pending or failed
         const { data: claimed, error: claimError } = await supabase
           .from("calls")
           .update({ status: "processing", processing_started_at: new Date().toISOString() })
@@ -71,7 +91,6 @@ export async function POST(req: NextRequest) {
         if (claimError || !claimed || claimed.length === 0) {
           console.log(`[process] Recording ${recordingId} could not be claimed (already processing?):`, claimError?.message);
           send({ type: "done", processed: 0, failed: 0 });
-          controller.close();
           return;
         }
         console.log(`[process] Claimed recording ${recordingId}`);
@@ -119,7 +138,6 @@ export async function POST(req: NextRequest) {
             { onConflict: "recording_id" }
           );
           send({ type: "done", processed: 0, failed: 0 });
-          controller.close();
           return;
         }
 
@@ -222,7 +240,7 @@ export async function POST(req: NextRequest) {
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
-        controller.close();
+        close();
       }
     },
   });
