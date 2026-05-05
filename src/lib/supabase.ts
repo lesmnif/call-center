@@ -6,23 +6,14 @@ export type CallRecord = {
   status: 'pending' | 'processing' | 'done' | 'failed' | 'skipped' | 'permanently_failed';
   start_time: string | null;
   caller_phone: string | null;
-  callee_phone: string | null;
-  transcript: string | null;
   agent_name: string | null;
   customer_name: string | null;
   store: string | null;
   category: string | null;
   order_type: string | null;
-  products: string[];
-  order_total: string | null;
-  payment_method: string | null;
   summary: string | null;
   sentiment: string | null;
   outcome: string | null;
-  key_points: string[];
-  action_items: string[];
-  language: string | null;
-  processed_at: string | null;
   duration_seconds: number | null;
   sale_completed: boolean | null;
   upsell_attempted: boolean | null;
@@ -31,12 +22,24 @@ export type CallRecord = {
   efficiency_score: number | null;
   communication_score: number | null;
   resolution_score: number | null;
-  score_reasoning: string | null;
-  improvement_notes: string | null;
-  skip_reason: string | null;
   upsell_opportunities: string | null;
-  retry_count: number;
-  processing_started_at: string | null;
+  // Detail-only fields — omitted from the slim list query and loaded on demand
+  // by useCallDetail. Optional so slim payloads typecheck.
+  transcript?: string | null;
+  score_reasoning?: string | null;
+  improvement_notes?: string | null;
+  key_points?: string[];
+  action_items?: string[];
+  language?: string | null;
+  products?: string[];
+  order_total?: string | null;
+  payment_method?: string | null;
+  retry_count?: number;
+  // Server/admin-only fields — never selected by client queries.
+  callee_phone?: string | null;
+  processed_at?: string | null;
+  skip_reason?: string | null;
+  processing_started_at?: string | null;
 };
 
 export function getSupabaseServer() {

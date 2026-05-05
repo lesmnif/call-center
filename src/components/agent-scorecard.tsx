@@ -11,6 +11,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from "recharts";
 import { type CallRecord } from "@/lib/supabase";
+import { DEFAULT_WINDOW_DAYS } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { CallDetail } from "./call-detail";
 import { TZ, todayPacific, dateToPacificStr } from "@/lib/timezone";
@@ -100,7 +101,7 @@ const COLUMN_TOOLTIPS: Record<string, string> = {
 type AgentDateRange = "all" | "today" | "yesterday" | "3d" | "5d" | "custom";
 
 const DATE_PRESETS: { value: AgentDateRange; label: string }[] = [
-  { value: "all",       label: "All time"   },
+  { value: "all",       label: `Last ${DEFAULT_WINDOW_DAYS} days` },
   { value: "today",     label: "Today"      },
   { value: "yesterday", label: "Yesterday"  },
   { value: "3d",        label: "3 days"     },
@@ -525,7 +526,7 @@ function AgentDetail({
                     />
                   }
                 />
-                <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
               </BarChart>
             </ChartContainer>
           </div>

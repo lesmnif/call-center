@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useMemo } from "react";
+import { DEFAULT_WINDOW_DAYS } from "@/lib/hooks";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -43,7 +44,7 @@ type Props = {
 const ALL = "__all__";
 
 const DATE_PRESETS: { value: FilterState["dateRange"]; label: string }[] = [
-  { value: "all",       label: "All time"   },
+  { value: "all",       label: `Last ${DEFAULT_WINDOW_DAYS} days` },
   { value: "today",     label: "Today"      },
   { value: "yesterday", label: "Yesterday"  },
   { value: "3d",        label: "3 days"     },
@@ -452,7 +453,6 @@ export function applyFilters(calls: CallRecord[], filters: FilterState): CallRec
       const outcomeLabel = c.outcome === "follow_up_needed" ? "follow up" : (c.outcome ?? "");
       if (
         !(
-          c.transcript?.toLowerCase().includes(q) ||
           c.summary?.toLowerCase().includes(q) ||
           c.customer_name?.toLowerCase().includes(q) ||
           c.agent_name?.toLowerCase().includes(q) ||

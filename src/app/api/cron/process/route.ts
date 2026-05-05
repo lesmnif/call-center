@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ThreeCXClient } from "@/lib/three-cx-client";
+import { getThreeCXClient } from "@/lib/three-cx-client";
 import { transcribe, analyze, detectJunk } from "@/lib/ai";
 import { getSupabaseServer } from "@/lib/supabase";
 
@@ -18,8 +18,7 @@ export async function GET(req: NextRequest) {
   }
 
   const supabase = getSupabaseServer();
-  const cx = new ThreeCXClient();
-  await cx.login();
+  const cx = getThreeCXClient();
 
   // Phase 1: Sync metadata from 3CX
   let synced = 0;

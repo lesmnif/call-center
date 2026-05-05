@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ThreeCXClient } from "@/lib/three-cx-client";
+import { getThreeCXClient } from "@/lib/three-cx-client";
 import { getSupabaseServer } from "@/lib/supabase";
 
 export const maxDuration = 60;
@@ -16,8 +16,7 @@ export async function POST(_req: NextRequest) {
       .eq("status", "processing")
       .lt("processing_started_at", new Date(Date.now() - 5 * 60 * 1000).toISOString());
 
-    const cx = new ThreeCXClient();
-    await cx.login();
+    const cx = getThreeCXClient();
     const allRecordings = await cx.getRecordingsList();
 
     // Count existing IDs to know how many are new

@@ -16,22 +16,27 @@ type SessionResponse = {
   version: string;
 };
 
-async function fetchInsecure(
-  url: string,
-  init?: RequestInit
-): Promise<Response> {
-  // Node 18+ supports this via env, but we use it inline for clarity
-  return fetch(url, {
-    ...init,
-    // @ts-expect-error -- Node.js specific TLS option
-    agent: undefined,
-  });
-}
-
 export class ThreeCXClient {
   private accessToken: string | null = null;
   private sessionId: string | null = null;
   private cookies: string[] = [];
+  private loginPromise: Promise<void> | null = null;
+
+  private invalidateSession(): void {
+    this.accessToken = null;
+    this.sessionId = null;
+    this.cookies = [];
+  }
+
+  async ensureLoggedIn(): Promise<void> {
+    if (this.sessionId) return;
+    if (!this.loginPromise) {
+      this.loginPromise = this.login().finally(() => {
+        this.loginPromise = null;
+      });
+    }
+    await this.loginPromise;
+  }
 
   async login(): Promise<void> {
     // Step 1: username + password
@@ -51,7 +56,6 @@ export class ThreeCXClient {
     if (!r1.ok)
       throw new Error(`3CX login step 1 failed: ${r1.status} ${await r1.text()}`);
 
-    // Capture cookies (RefreshTokenCookie)
     const setCookies = r1.headers.getSetCookie?.() ?? [];
     this.cookies = setCookies.map((c) => c.split(";")[0]);
 
@@ -93,6 +97,18 @@ export class ThreeCXClient {
     this.sessionId = sessionData.sessionKey;
   }
 
+  // Run an authenticated request; on 401/403 invalidate the session, re-login once, retry.
+  private async authedFetch(send: () => Promise<Response>): Promise<Response> {
+    await this.ensureLoggedIn();
+    let r = await send();
+    if (r.status === 401 || r.status === 403) {
+      this.invalidateSession();
+      await this.ensureLoggedIn();
+      r = await send();
+    }
+    return r;
+  }
+
   async getRecordingsList(): Promise<RawRecording[]> {
     // Protobuf payload: field 6 (count limit) changed from 80 (0x50) to 1000 (0xe8 0x07).
     // The original limit of 80 caused data loss — any day with 80+ calls would push
@@ -102,16 +118,18 @@ export class ThreeCXClient {
       0x06, 0x0a, 0x00, 0x12, 0x00, 0x1a, 0x00, 0x50, 0x00, 0x5a, 0x00,
     ]);
 
-    const r = await fetch(`${BASE_URL}/MyPhone/MPWebService.asmx`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/octet-stream",
-        accept: "application/octet-stream",
-        myphonesession: this.sessionId!,
-        cookie: this.cookies.join("; "),
-      },
-      body: payload,
-    });
+    const r = await this.authedFetch(() =>
+      fetch(`${BASE_URL}/MyPhone/MPWebService.asmx`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          accept: "application/octet-stream",
+          myphonesession: this.sessionId!,
+          cookie: this.cookies.join("; "),
+        },
+        body: payload,
+      })
+    );
     if (!r.ok) throw new Error(`MPWebService failed: ${r.status}`);
 
     const buf = new Uint8Array(await r.arrayBuffer());
@@ -119,12 +137,22 @@ export class ThreeCXClient {
   }
 
   async downloadRecording(recordingId: number): Promise<ArrayBuffer> {
-    const url = `${BASE_URL}/MyPhone/downloadRecording/${recordingId}?sessionId=${this.sessionId}`;
-    const r = await fetch(url, {
-      headers: { cookie: this.cookies.join("; ") },
-    });
-    if (!r.ok)
-      throw new Error(`Download ${recordingId} failed: ${r.status}`);
+    const r = await this.authedFetch(() =>
+      fetch(
+        `${BASE_URL}/MyPhone/downloadRecording/${recordingId}?sessionId=${this.sessionId}`,
+        { headers: { cookie: this.cookies.join("; ") } }
+      )
+    );
+    if (!r.ok) throw new Error(`Download ${recordingId} failed: ${r.status}`);
     return r.arrayBuffer();
   }
+}
+
+// Module-level singleton — persists across warm serverless invocations on Fluid Compute,
+// so the 3-step login is reused instead of running on every request.
+let sharedClient: ThreeCXClient | null = null;
+
+export function getThreeCXClient(): ThreeCXClient {
+  if (!sharedClient) sharedClient = new ThreeCXClient();
+  return sharedClient;
 }

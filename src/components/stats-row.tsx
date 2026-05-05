@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { NumberTicker } from "@/components/ui/number-ticker";
+import { DEFAULT_WINDOW_DAYS } from "@/lib/hooks";
 import {
   ChartContainer,
   ChartTooltip,
@@ -117,11 +117,9 @@ export function StatsRow({ calls }: Props) {
         </p>
         <div>
           <div className="text-[42px] font-bold leading-none tracking-tight text-foreground tabular-nums">
-            {total > 0
-              ? <NumberTicker value={total} className="text-[42px] font-bold leading-none tracking-tight" />
-              : "0"}
+            {total.toLocaleString()}
           </div>
-          <p className="text-[11px] text-muted-foreground/50 mt-2 font-mono">all time</p>
+          <p className="text-[11px] text-muted-foreground/50 mt-2 font-mono">last {DEFAULT_WINDOW_DAYS} days</p>
         </div>
       </div>
 
@@ -136,7 +134,7 @@ export function StatsRow({ calls }: Props) {
             style={{ color: salesStats.totalRevenue > 0 ? "oklch(0.59 0.17 148)" : "oklch(0.145 0.012 258 / 0.4)" }}
           >
             {salesStats.totalRevenue > 0
-              ? <><span className="text-[28px]">$</span><NumberTicker value={Math.round(salesStats.totalRevenue)} className="text-[42px] font-bold leading-none tracking-tight" style={{ color: "oklch(0.59 0.17 148)" }} /></>
+              ? <><span className="text-[28px]">$</span>{Math.round(salesStats.totalRevenue).toLocaleString()}</>
               : "$0"}
           </div>
           <p className="text-[11px] text-muted-foreground/50 mt-2 font-mono">
@@ -215,6 +213,7 @@ export function StatsRow({ calls }: Props) {
               fill="url(#volumeGradient)"
               dot={false}
               activeDot={{ r: 3, fill: "oklch(0.56 0.23 275)", strokeWidth: 0 }}
+              isAnimationActive={false}
             />
           </AreaChart>
         </ChartContainer>

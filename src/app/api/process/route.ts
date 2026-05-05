@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { ThreeCXClient } from "@/lib/three-cx-client";
+import { getThreeCXClient } from "@/lib/three-cx-client";
 import { transcribe, analyze, detectJunk } from "@/lib/ai";
 import { getSupabaseServer } from "@/lib/supabase";
 
@@ -97,9 +97,9 @@ export async function POST(req: NextRequest) {
 
         // Login to 3CX
         send({ type: "status", message: "Connecting to 3CX..." });
-        const cx = new ThreeCXClient();
-        await cx.login();
-        console.log(`[process] 3CX login OK`);
+        const cx = getThreeCXClient();
+        await cx.ensureLoggedIn();
+        console.log(`[process] 3CX session ready`);
 
         // Download
         send({ type: "processing", recordingId, step: "downloading", current: 1, total: 1 });

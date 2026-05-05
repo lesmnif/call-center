@@ -1,16 +1,40 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import dynamic from "next/dynamic";
 import { useSync, useProcess, useCalls } from "@/lib/hooks";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { SyncBar } from "@/components/sync-bar";
 import { StatsRow } from "@/components/stats-row";
 import { Filters, applyFilters, type FilterState } from "@/components/filters";
 import { CallsTable } from "@/components/calls-table";
-import { AgentScorecard } from "@/components/agent-scorecard";
-import { AnalyticsView } from "@/components/analytics-view";
-import { ReportsPanel } from "@/components/reports-panel";
 import { DATA_QUALITY_CUTOFF } from "@/lib/constants";
+
+// Heavy tabs are code-split: their JS (including Recharts for AnalyticsView) is
+// not downloaded until the user actually clicks the tab. Once a tab is visited,
+// we keep it mounted (display:none when inactive) so re-switching is instant
+// and the tab's useMemo aggregations don't re-run.
+const AgentScorecard = dynamic(
+  () => import("@/components/agent-scorecard").then((m) => m.AgentScorecard),
+  { ssr: false, loading: () => <TabLoading /> }
+);
+const AnalyticsView = dynamic(
+  () => import("@/components/analytics-view").then((m) => m.AnalyticsView),
+  { ssr: false, loading: () => <TabLoading /> }
+);
+const ReportsPanel = dynamic(
+  () => import("@/components/reports-panel").then((m) => m.ReportsPanel),
+  { ssr: false, loading: () => <TabLoading /> }
+);
+
+function TabLoading() {
+  return (
+    <div className="flex items-center gap-2 py-12 justify-center">
+      <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30 animate-pulse" />
+      <span className="text-[11px] font-mono text-muted-foreground/40">Loading…</span>
+    </div>
+  );
+}
 
 // Pre-parsed once — avoids re-parsing the offset string on every render/filter
 const CUTOFF_MS = new Date(DATA_QUALITY_CUTOFF).getTime();
@@ -36,8 +60,14 @@ export default function Dashboard() {
   const { calls, loading, refetch } = useCalls();
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [view, setView] = useState<"calls" | "agents" | "analytics" | "reports">("calls");
-  const hasAutoSynced = useRef(false);
-  const autoDispatchedIds = useRef<Set<number>>(new Set());
+
+  // Track which tabs the user has visited. Once visited, a tab stays mounted
+  // (just hidden via CSS when inactive) so its aggregations + chart trees
+  // survive subsequent tab switches and re-displaying is instant.
+  const [visited, setVisited] = useState<Set<string>>(() => new Set(["calls"]));
+  useEffect(() => {
+    setVisited((prev) => (prev.has(view) ? prev : new Set(prev).add(view)));
+  }, [view]);
 
   // All actionable calls — used for the manual Analyze button (includes failed so user can retry)
   // Filter out skipped calls from all UI components
@@ -60,77 +90,28 @@ export default function Dashboard() {
     [calls]
   );
 
-  // Pending calls for auto-dispatch (primary priority)
-  const autoPendingIds = useMemo(
-    () => calls.filter((c) => c.status === "pending").map((c) => c.recording_id),
-    [calls]
-  );
-
-  // Failed calls — retried automatically after all pending are done
-  const autoFailedIds = useMemo(
-    () => calls.filter((c) => c.status === "failed").map((c) => c.recording_id),
-    [calls]
-  );
-
-  useEffect(() => {
-    if (!hasAutoSynced.current) {
-      hasAutoSynced.current = true;
-      startSync();
-    }
-  }, [startSync]);
-
+  // Sync and processing are now button-only (no auto-trigger on page load).
+  // Refetch the call list when a sync finishes so new rows appear.
   useEffect(() => {
     if (!syncing && syncResult !== null) {
       refetch();
     }
   }, [syncing, syncResult, refetch]);
 
-  // Auto-dispatch: pending first, then retry failed once pending are exhausted.
-  // autoDispatchedIds tracks which IDs were sent to avoid double-dispatch within a session.
-  useEffect(() => {
-    if (!syncing && syncResult !== null && !loading && !processing) {
-      // First: dispatch any undispatched pending calls
-      const undispatchedPending = autoPendingIds.filter(
-        (id) => !autoDispatchedIds.current.has(id)
-      );
-      if (undispatchedPending.length > 0) {
-        undispatchedPending.forEach((id) => autoDispatchedIds.current.add(id));
-        startProcess(undispatchedPending);
-        return;
-      }
-
-      // Then: retry failed calls that haven't been dispatched yet
-      const undispatchedFailed = autoFailedIds.filter(
-        (id) => !autoDispatchedIds.current.has(id)
-      );
-      if (undispatchedFailed.length > 0) {
-        undispatchedFailed.forEach((id) => autoDispatchedIds.current.add(id));
-        startProcess(undispatchedFailed);
-      }
-    }
-  }, [syncing, syncResult, loading, autoPendingIds, autoFailedIds, processing, startProcess]);
-
-  // Refresh table data every 10s during processing so rows update as they complete.
-  // Safe: auto-dispatch checks !processing, so this won't restart the batch.
+  // While processing is running, refresh the table every 10s so rows update live.
   useEffect(() => {
     if (!processing) return;
     const interval = setInterval(refetch, 10_000);
     return () => clearInterval(interval);
   }, [processing, refetch]);
 
-  // After the entire batch finishes: refetch, then reset dispatched tracking
-  // so any calls that are still 'pending' (missed for any reason) get picked up.
+  // Refetch once more after a processing batch finishes to pick up final rows.
   const prevProcessing = useRef(false);
   useEffect(() => {
     const wasProcessing = prevProcessing.current;
     prevProcessing.current = processing;
-
-    // Only trigger when processing transitions from true → false (batch completed)
     if (wasProcessing && !processing) {
-      const timer = setTimeout(() => {
-        autoDispatchedIds.current.clear();
-        refetch();
-      }, 500);
+      const timer = setTimeout(refetch, 500);
       return () => clearTimeout(timer);
     }
   }, [processing, refetch]);
@@ -146,17 +127,23 @@ export default function Dashboard() {
   );
 
   const pendingCount = pendingIds.length;
-  const filtered = applyFilters(qualityCalls, filters);
-  const hasActiveFilters =
-    filters.search !== "" ||
-    filters.store !== "__all__" ||
-    filters.agent !== "__all__" ||
-    filters.category !== "__all__" ||
-    filters.sentiment !== "__all__" ||
-    filters.outcome !== "__all__" ||
-    filters.salesActivity !== "__all__" ||
-    filters.orderType !== "__all__" ||
-    filters.dateRange !== "all";
+  const filtered = useMemo(
+    () => applyFilters(qualityCalls, filters),
+    [qualityCalls, filters]
+  );
+  const hasActiveFilters = useMemo(
+    () =>
+      filters.search !== "" ||
+      filters.store !== "__all__" ||
+      filters.agent !== "__all__" ||
+      filters.category !== "__all__" ||
+      filters.sentiment !== "__all__" ||
+      filters.outcome !== "__all__" ||
+      filters.salesActivity !== "__all__" ||
+      filters.orderType !== "__all__" ||
+      filters.dateRange !== "all",
+    [filters]
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -293,44 +280,43 @@ export default function Dashboard() {
           </div>
         </BlurFade>
 
-        {view === "calls" ? (
-          <>
-            <BlurFade delay={0.12} duration={0.45}>
-              <StatsRow calls={filtered} />
-            </BlurFade>
-
-            <BlurFade delay={0.17} duration={0.45}>
-              <div className="space-y-2.5">
-                <Filters calls={qualityCalls} filters={filters} onChange={setFilters} />
-                <div className="flex items-center gap-2 pl-0.5">
-                  <p className="text-xs font-mono text-muted-foreground/50 tabular-nums">
-                    {filtered.length === qualityCalls.length
-                      ? `${qualityCalls.length.toLocaleString()} calls`
-                      : `${filtered.length.toLocaleString()} of ${qualityCalls.length.toLocaleString()}`}
-                  </p>
-                  {filtered.length !== qualityCalls.length && (
-                    <span className="text-xs font-mono text-muted-foreground/35">· filtered</span>
-                  )}
-                </div>
+        {/* All visited tabs stay mounted; only the active one is visible. */}
+        <div hidden={view !== "calls"}>
+          <div className="space-y-4">
+            <StatsRow calls={filtered} />
+            <div className="space-y-2.5">
+              <Filters calls={qualityCalls} filters={filters} onChange={setFilters} />
+              <div className="flex items-center gap-2 pl-0.5">
+                <p className="text-xs font-mono text-muted-foreground/50 tabular-nums">
+                  {filtered.length === qualityCalls.length
+                    ? `${qualityCalls.length.toLocaleString()} calls`
+                    : `${filtered.length.toLocaleString()} of ${qualityCalls.length.toLocaleString()}`}
+                </p>
+                {filtered.length !== qualityCalls.length && (
+                  <span className="text-xs font-mono text-muted-foreground/35">· filtered</span>
+                )}
               </div>
-            </BlurFade>
+            </div>
+            <CallsTable calls={filtered} onProcess={handleProcessOne} isFiltered={hasActiveFilters} timeSort={filters.timeSort} />
+          </div>
+        </div>
 
-            <BlurFade delay={0.22} duration={0.45}>
-              <CallsTable calls={filtered} onProcess={handleProcessOne} isFiltered={hasActiveFilters} timeSort={filters.timeSort} />
-            </BlurFade>
-          </>
-        ) : view === "agents" ? (
-          <BlurFade delay={0.12} duration={0.45}>
+        {visited.has("agents") && (
+          <div hidden={view !== "agents"}>
             <AgentScorecard calls={qualityCalls} onProcess={handleProcessOne} />
-          </BlurFade>
-        ) : view === "analytics" ? (
-          <BlurFade delay={0.12} duration={0.45}>
+          </div>
+        )}
+
+        {visited.has("analytics") && (
+          <div hidden={view !== "analytics"}>
             <AnalyticsView calls={qualityCalls} />
-          </BlurFade>
-        ) : (
-          <BlurFade delay={0.12} duration={0.45}>
+          </div>
+        )}
+
+        {visited.has("reports") && (
+          <div hidden={view !== "reports"}>
             <ReportsPanel calls={qualityCalls} />
-          </BlurFade>
+          </div>
         )}
 
       </main>

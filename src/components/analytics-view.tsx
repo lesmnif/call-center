@@ -12,6 +12,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { type CallRecord } from "@/lib/supabase";
+import { DEFAULT_WINDOW_DAYS } from "@/lib/hooks";
 import {
   groupByPeriod,
   getHourPacific,
@@ -27,11 +28,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Calendar, X } from "lucide-react";
-import { DATA_QUALITY_CUTOFF } from "@/lib/constants";
-
-const CUTOFF_LABEL = new Date(DATA_QUALITY_CUTOFF).toLocaleDateString("en-US", {
-  month: "short", day: "numeric", timeZone: TZ,
-});
 
 type AnalyticsDateRange = "all" | "yesterday" | "3d" | "5d" | "custom";
 
@@ -72,7 +68,7 @@ const SLATE = "oklch(0.55 0.04 258)";
 const DAYS_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const DATE_PRESETS: { value: AnalyticsDateRange; label: string }[] = [
-  { value: "all",       label: "All time"  },
+  { value: "all",       label: `Last ${DEFAULT_WINDOW_DAYS} days` },
   { value: "yesterday", label: "Yesterday" },
   { value: "3d",        label: "3 days"    },
   { value: "5d",        label: "5 days"    },
@@ -168,8 +164,9 @@ export function AnalyticsView({ calls }: Props) {
         new Date(c.start_time!).toLocaleDateString("en-CA", { timeZone: TZ })
       )
     ).size;
-    // For "all time", anchor start to the cutoff so the display matches what the data boundary is
-    const start = dateRange === "all" ? CUTOFF_LABEL : toStr(
+    // Use the actual earliest loaded date — the list is windowed (default 30 days),
+    // so anchoring to a static cutoff would misrepresent the range.
+    const start = toStr(
       Math.min(...rangedCalls.filter(c => c.start_time).map(c => new Date(c.start_time!).getTime()))
     );
     const end = toStr(maxTs);
@@ -192,8 +189,10 @@ export function AnalyticsView({ calls }: Props) {
         new Date(c.start_time!).toLocaleDateString("en-CA", { timeZone: TZ })
       )
     ).size;
-    // Always anchor start to the cutoff — pattern charts cover the full dataset from cutoff onward
-    const start = CUTOFF_LABEL;
+    // Pattern charts cover everything currently loaded (the 30-day window).
+    const start = toStr(
+      Math.min(...calls.filter(c => c.start_time).map(c => new Date(c.start_time!).getTime()))
+    );
     const end = toStr(maxTs);
     return { start, end, days: distinctDays, label: start === end ? start : `${start} – ${end}` };
   }, [calls]);
@@ -563,7 +562,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                 <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                 <YAxis hide allowDecimals={false} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="calls" fill={BRAND} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="calls" fill={BRAND} radius={[3, 3, 0, 0]} isAnimationActive={false} />
               </BarChart>
             </ChartContainer>
           </ChartCard>
@@ -576,7 +575,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                 <XAxis dataKey="hour" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} interval={1} />
                 <YAxis hide allowDecimals={false} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="calls" fill={BRAND} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="calls" fill={BRAND} radius={[3, 3, 0, 0]} isAnimationActive={false} />
               </BarChart>
             </ChartContainer>
           </ChartCard>
@@ -589,7 +588,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                 <XAxis dataKey="day" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                 <YAxis hide allowDecimals={false} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="calls" radius={[3, 3, 0, 0]}>
+                <Bar dataKey="calls" radius={[3, 3, 0, 0]} isAnimationActive={false}>
                   {dayOfWeek.map((entry) => (
                     <Cell key={entry.day} fill={entry.day === "Sat" || entry.day === "Sun" ? SLATE : BRAND} />
                   ))}
@@ -613,7 +612,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                 <XAxis type="number" hide />
                 <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={100} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="count" fill={BRAND} radius={[0, 3, 3, 0]} barSize={14}>
+                <Bar dataKey="count" fill={BRAND} radius={[0, 3, 3, 0]} barSize={14} isAnimationActive={false}>
                   <LabelList dataKey="count" position="right" style={{ fontSize: 10, fill: "oklch(0.55 0.04 258)" }} />
                 </Bar>
               </BarChart>
@@ -686,7 +685,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                 <XAxis dataKey="label" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
                 <ChartTooltip content={<ChartTooltipContent formatter={(value) => `$${Number(value).toFixed(2)}`} />} />
-                <Line type="monotone" dataKey="revenue" stroke={GREEN} strokeWidth={2} dot={{ fill: GREEN, r: 3 }} />
+                <Line type="monotone" dataKey="revenue" stroke={GREEN} strokeWidth={2} dot={{ fill: GREEN, r: 3 }} isAnimationActive={false} />
               </LineChart>
             </ChartContainer>
           </ChartCard>
@@ -698,7 +697,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                 <XAxis dataKey="label" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 9 }} axisLine={false} tickLine={false} domain={[0, 100]} />
                 <ChartTooltip content={<ChartTooltipContent formatter={(value) => `${value}%`} />} />
-                <Line type="monotone" dataKey="rate" stroke={BRAND} strokeWidth={2} dot={{ fill: BRAND, r: 3 }} />
+                <Line type="monotone" dataKey="rate" stroke={BRAND} strokeWidth={2} dot={{ fill: BRAND, r: 3 }} isAnimationActive={false} />
               </LineChart>
             </ChartContainer>
           </ChartCard>
@@ -718,7 +717,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                 <XAxis type="number" hide />
                 <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={90} />
                 <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatDur(Number(value))} />} />
-                <Bar dataKey="avg" fill={BRAND} radius={[0, 3, 3, 0]} barSize={14} />
+                <Bar dataKey="avg" fill={BRAND} radius={[0, 3, 3, 0]} barSize={14} isAnimationActive={false} />
               </BarChart>
             </ChartContainer>
           </ChartCard>
@@ -738,7 +737,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                     />
                   }
                 />
-                <Bar dataKey="avg" fill={AMBER} radius={[0, 3, 3, 0]} barSize={14} />
+                <Bar dataKey="avg" fill={AMBER} radius={[0, 3, 3, 0]} barSize={14} isAnimationActive={false} />
               </BarChart>
             </ChartContainer>
           </ChartCard>
@@ -768,8 +767,8 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                     />
                   }
                 />
-                <Bar dataKey="converted" stackId="a" fill={GREEN} radius={[0, 0, 0, 0]} barSize={16} />
-                <Bar dataKey="missed"    stackId="a" fill={RED}   radius={[0, 3, 3, 0]} barSize={16}>
+                <Bar dataKey="converted" stackId="a" fill={GREEN} radius={[0, 0, 0, 0]} barSize={16} isAnimationActive={false} />
+                <Bar dataKey="missed"    stackId="a" fill={RED}   radius={[0, 3, 3, 0]} barSize={16} isAnimationActive={false}>
                   <LabelList
                     content={(props) => {
                       const { x, y, width, height, index } = props as { x: number; y: number; width: number; height: number; index: number };
@@ -829,7 +828,7 @@ const durConfig: ChartConfig        = { avg:        { label: "Avg Duration",   c
                   />
                 }
               />
-              <Bar dataKey={agentMetric} fill={`var(--color-${agentMetric})`} radius={[3, 3, 0, 0]} />
+              <Bar dataKey={agentMetric} fill={`var(--color-${agentMetric})`} radius={[3, 3, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ChartContainer>
         </div>

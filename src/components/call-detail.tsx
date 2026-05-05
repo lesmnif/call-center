@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useCallDetail } from "@/lib/hooks";
 import {
   Dialog,
   DialogContent,
@@ -68,7 +69,16 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export function CallDetail({ call, open, onClose, onProcess }: Props) {
   const [copied, setCopied] = useState(false);
 
-  if (!call) return null;
+  // Heavy fields (transcript, score_reasoning, improvement_notes, key_points,
+  // action_items) are excluded from the main list query. Fetch them on demand
+  // when this dialog opens so the slim list payload stays small.
+  const { extras } = useCallDetail(open && call ? call.recording_id : null);
+  const fullCall = useMemo(
+    () => (call && extras ? { ...call, ...extras } : call),
+    [call, extras]
+  );
+
+  if (!call || !fullCall) return null;
 
   const time = call.start_time
     ? new Date(call.start_time).toLocaleString("en-US", {
@@ -90,8 +100,8 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
   const topBarColor = sentiment?.bar ?? (isProcessing ? "oklch(0.56 0.23 275)" : "oklch(0.90 0.006 258)");
 
   const handleCopy = async () => {
-    if (call.transcript) {
-      await navigator.clipboard.writeText(call.transcript);
+    if (fullCall.transcript) {
+      await navigator.clipboard.writeText(fullCall.transcript);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -301,10 +311,10 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
                       )}
 
                       {/* Score reasoning */}
-                      {call.score_reasoning && (
+                      {fullCall.score_reasoning && (
                         <div className="mt-3 mb-3">
                           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/50 mb-1.5">Score Notes</p>
-                          <p className="text-[11px] leading-relaxed text-foreground/70">{call.score_reasoning}</p>
+                          <p className="text-[11px] leading-relaxed text-foreground/70">{fullCall.score_reasoning}</p>
                         </div>
                       )}
 
@@ -339,13 +349,13 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
                       )}
 
                       {/* Coaching tips */}
-                      {call.improvement_notes && (
+                      {fullCall.improvement_notes && (
                         <div className="mt-3 border-t border-border pt-3">
                           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] mb-2" style={{ color: "oklch(0.56 0.23 275)" }}>
                             Coaching Tips
                           </p>
                           <ul className="space-y-1.5">
-                            {call.improvement_notes.split("\n").filter(Boolean).map((tip, i) => (
+                            {fullCall.improvement_notes.split("\n").filter(Boolean).map((tip, i) => (
                               <li key={i} className="flex gap-2 text-[11px] leading-relaxed text-foreground/70">
                                 <span className="mt-1.5 w-1 h-1 rounded-full shrink-0" style={{ background: "oklch(0.56 0.23 275)" }} />
                                 <span>{tip}</span>
@@ -374,13 +384,13 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
               )}
 
               {/* Key Points + Action Items side by side */}
-              {isDone && (call.key_points?.length || call.action_items?.length) ? (
+              {isDone && (fullCall.key_points?.length || fullCall.action_items?.length) ? (
                 <div className="grid grid-cols-2 gap-6">
-                  {call.key_points && call.key_points.length > 0 && (
+                  {fullCall.key_points && fullCall.key_points.length > 0 && (
                     <div>
                       <SectionLabel>Key Points</SectionLabel>
                       <ul className="space-y-2.5">
-                        {call.key_points.map((kp, i) => (
+                        {fullCall.key_points.map((kp, i) => (
                           <li key={i} className="flex gap-2.5 text-[13px] leading-relaxed">
                             <span className="mt-2 w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
                             <span className="text-foreground/80">{kp}</span>
@@ -389,11 +399,11 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
                       </ul>
                     </div>
                   )}
-                  {call.action_items && call.action_items.length > 0 && (
+                  {fullCall.action_items && fullCall.action_items.length > 0 && (
                     <div>
                       <SectionLabel>Action Items</SectionLabel>
                       <ul className="space-y-2.5">
-                        {call.action_items.map((ai, i) => (
+                        {fullCall.action_items.map((ai, i) => (
                           <li key={i} className="flex gap-2.5 text-[13px] leading-relaxed">
                             <svg className="mt-0.5 shrink-0 text-primary/60" width="14" height="14" viewBox="0 0 14 14" fill="none">
                               <rect x="1.5" y="1.5" width="11" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.25"/>
@@ -442,7 +452,7 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
               )}
 
               {/* Transcript */}
-              {isDone && call.transcript && (
+              {isDone && fullCall.transcript && (
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <SectionLabel>Full Transcript</SectionLabel>
@@ -462,7 +472,7 @@ export function CallDetail({ call, open, onClose, onProcess }: Props) {
                     </div>
                     <div className="p-4 max-h-72 overflow-y-auto bg-card">
                       <pre className="text-[12px] font-mono text-foreground/70 leading-[1.85] whitespace-pre-wrap">
-                        {call.transcript}
+                        {fullCall.transcript}
                       </pre>
                     </div>
                   </div>
